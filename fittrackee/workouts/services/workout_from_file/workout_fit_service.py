@@ -40,6 +40,22 @@ ALL_KEYS = [*FIT_MATCHING_FIELDS.values(), "pauses"]
 
 
 class WorkoutFitService(WorkoutGpxService):
+    @staticmethod
+    def is_stop_all_event(frame: "FitDataMessage") -> bool:
+        """Return whether a FIT frame is a timer ``stop_all`` event.
+
+        Some FIT producers emit an ``event`` message without the optional
+        ``event`` or ``event_type`` fields. fitdecode raises when a missing
+        field is read, so check both fields before accessing their values.
+        """
+        return (
+            frame.name == "event"
+            and frame.has_field("event")
+            and frame.has_field("event_type")
+            and frame.get_value("event") == "timer"
+            and frame.get_value("event_type") == "stop_all"
+        )
+
     def __init__(
         self,
         auth_user: "User",
@@ -361,9 +377,7 @@ class WorkoutFitService(WorkoutGpxService):
                 elif (
                     create_segment_on_events
                     and segments_creation_event in ["only_manual", "all"]
-                    and frame.name == "event"
-                    and frame.get_value("event") == "timer"
-                    and frame.get_value("event_type") == "stop_all"
+                    and cls.is_stop_all_event(frame)
                 ):
                     if (
                         segments_creation_event == "only_manual"
