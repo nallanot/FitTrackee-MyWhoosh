@@ -92,5 +92,14 @@ services:
 
 networks:
   external_network:
+    # Reuse the existing Traefik network instead of consuming another Docker
+    # automatic address pool. Override TRAEFIK_NETWORK if it has another name.
+    name: ${TRAEFIK_NETWORK:-traefik_default}
+    external: true
   internal_network:
     internal: true
+    # This host has exhausted Docker's predefined address pools. Keep the
+    # private database network deliberately small and outside existing ranges.
+    ipam:
+      config:
+        - subnet: ${FITTRACKEE_INTERNAL_SUBNET:-10.254.254.0/29}
