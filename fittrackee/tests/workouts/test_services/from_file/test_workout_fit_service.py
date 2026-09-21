@@ -1,7 +1,10 @@
+import struct
 from datetime import timedelta
+from io import BytesIO
 from typing import TYPE_CHECKING, Dict, Union
 from unittest.mock import patch
 
+import fitdecode
 import gpxpy
 import pytest
 import requests
@@ -102,6 +105,64 @@ class TestWorkoutFitServiceGetCoordinate(WorkoutFileMixin):
 
 
 class TestWorkoutFitServiceParseFile(WorkoutFileMixin):
+    @pytest.mark.parametrize(
+        "segments_creation_event", ["none", "only_manual", "all"]
+    )
+    @pytest.mark.parametrize(
+        "event_fields,is_stop",
+        [
+            ([], False),
+            ([(0, 0)], False),
+            ([(1, 4)], False),
+            ([(0, 0), (1, 4)], True),
+            ([(0, 0), (1, 0)], False),
+            ([(0, 9), (1, 4)], False),
+            ([(0, 255), (1, 4)], False),
+        ],
+    )
+    def test_it_parses_fit_with_incomplete_or_valid_events(
+        self,
+        segments_creation_event: str,
+        event_fields: list,
+        is_stop: bool,
+        sport_1_cycling: "Sport",
+    ) -> None:
+        # Real FIT bytes: two GPS records separated by an event. Omitting
+        # event fields reproduces the MyWhoosh failure in fitdecode itself.
+        data = bytearray(struct.pack("<BBBHB", 0x40, 0, 0, 20, 3))
+        data.extend(bytes([253, 4, 0x86, 0, 4, 0x85, 1, 4, 0x85]))
+        data.extend(struct.pack("<BIii", 0, 1000000000, 500000000, 100000000))
+        data.extend(
+            struct.pack("<BBBHB", 0x41, 0, 0, 21, 1 + len(event_fields))
+        )
+        data.extend(bytes([253, 4, 0x86]))
+        for field, _ in event_fields:
+            data.extend(bytes([field, 1, 0]))
+        data.extend(struct.pack("<BI", 1, 1000000001))
+        data.extend(bytes(value for _, value in event_fields))
+        data.extend(struct.pack("<BIii", 0, 1000000002, 500001000, 100001000))
+        header = struct.pack("<BBHI4s", 12, 0x10, 100, len(data), b".FIT")
+        payload = header + data
+        payload += struct.pack("<H", fitdecode.utils.compute_crc(payload))
+
+        gpx, _, _ = WorkoutFitService.parse_file(
+            BytesIO(payload),
+            segments_creation_event=segments_creation_event,
+            sport=sport_1_cycling,
+        )
+
+        segments = gpx.tracks[0].segments
+        assert len(segments) == (
+            2 if is_stop and segments_creation_event != "none" else 1
+        )
+        assert sum(len(segment.points) for segment in segments) == 2
+        assert segments[0].points[0].latitude == pytest.approx(
+            500000000 * 180.0 / 2**31
+        )
+        assert segments[-1].points[-1].longitude == pytest.approx(
+            100001000 * 180.0 / 2**31
+        )
+
     def test_it_raises_error_when_file_is_not_fit(
         self, app: "Flask", invalid_kml_file: str, sport_1_cycling: "Sport"
     ) -> None:

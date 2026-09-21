@@ -80,3 +80,27 @@ docker compose run --rm fittrackee ftcli db downgrade 28a548e58b3f
 
 Downgrading deletes the MyWhoosh connection and import ledger tables. It does
 not delete workouts that were already imported.
+
+## Recovery from incomplete FIT event messages
+
+If synchronization fails with `field "event" (idx #0) not found in message
+"event"`, update the source and rebuild **both** the web application and the
+scheduler. Restarting containers alone keeps the old parser:
+
+```bash
+git pull --ff-only
+docker compose up -d --build fittrackee fittrackee-mywhoosh-scheduler
+```
+
+For a Git-managed stack, pull/redeploy the latest `main` revision and rebuild
+the image for both services in the stack manager instead.
+
+Then choose **Profile → Connections → Synchronize now**. Failed imports are
+retried automatically when they are within the configured synchronization
+window; already imported activities are skipped. Do not delete the import
+ledger or reset the database.
+
+The parser now ignores event messages without `event` or `event_type` while
+preserving GPS records and valid timer stop events. The separate warning
+`EMAIL_URL is not provided, email sending is deactivated` only means outgoing
+email is disabled and does not cause this FIT parsing failure.
