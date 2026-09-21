@@ -30,18 +30,15 @@ may need to be updated.
 
 Back up the PostgreSQL database and the uploads directory first.
 
-Place this source tree on the Docker host, copy the existing FitTrackee `.env`
-file into it, and ensure `APP_SECRET_KEY` is set to a stable value. Changing
-that key later invalidates stored MyWhoosh tokens and requires users to
-reconnect.
+Set `APP_SECRET_KEY` and `POSTGRES_PASSWORD` in the environment-variable
+section of your stack manager. A physical `.env` file is not required.
+`APP_SECRET_KEY` must remain stable: changing it invalidates stored MyWhoosh
+tokens and requires users to reconnect.
 
 Build and start the customized image plus the native synchronization runner:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.mywhoosh.yml \
-  up -d --build
+docker compose up -d --build
 ```
 
 The normal FitTrackee entrypoint runs the new database migration automatically.
@@ -53,7 +50,7 @@ synchronization can be enabled on the same page.
 ## Synchronization interval
 
 The automatic runner checks enabled accounts every 10 minutes. To change the
-interval, add a value in seconds to `.env`, for example:
+interval, define a value in seconds in the stack environment, for example:
 
 ```env
 MYWHOOSH_SYNC_INTERVAL=1800
@@ -62,19 +59,13 @@ MYWHOOSH_SYNC_INTERVAL=1800
 The command can also be run manually:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.mywhoosh.yml \
-  exec fittrackee ftcli integrations mywhoosh-sync
+docker compose exec fittrackee ftcli integrations mywhoosh-sync
 ```
 
 To limit it to one FitTrackee account:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.mywhoosh.yml \
-  exec fittrackee ftcli integrations mywhoosh-sync --username USERNAME
+docker compose exec fittrackee ftcli integrations mywhoosh-sync --username USERNAME
 ```
 
 ## Removal
@@ -84,10 +75,7 @@ disabling automatic synchronization. The database migration can be downgraded
 with:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.mywhoosh.yml \
-  run --rm fittrackee ftcli db downgrade 28a548e58b3f
+docker compose run --rm fittrackee ftcli db downgrade 28a548e58b3f
 ```
 
 Downgrading deletes the MyWhoosh connection and import ledger tables. It does
