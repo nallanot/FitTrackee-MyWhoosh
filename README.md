@@ -1,3 +1,68 @@
-# FitTrackee MyWhoosh
+# FitTrackee
+**A simple self-hosted workout/activity tracker.**  
 
-FitTrackee 1.4.0b1 avec intégration native MyWhoosh.
+
+[![Python Version](https://img.shields.io/pypi/pyversions/fittrackee.svg)](https://python.org)
+[![Flask Version](https://img.shields.io/badge/flask-3.1-brightgreen.svg)](http://flask.pocoo.org/) 
+[![code formatter: ruff](https://img.shields.io/badge/code%20formatter-ruff-d7ff64)](https://docs.astral.sh/ruff/) 
+[![type check: mypy](https://img.shields.io/badge/type%20check-mypy-blue)](http://mypy-lang.org/)  
+[![Vue Version](https://img.shields.io/badge/vue-3.5-brightgreen.svg)](https://v3.vuejs.org/) 
+[![code formatter: prettier](https://img.shields.io/badge/code%20formatter-prettier-ff69b4.svg)](https://github.com/prettier/prettier) 
+[![Typescript Version](https://img.shields.io/badge/types-TypeScript-blue)](https://www.typescriptlang.org/)  
+[![PostgreSQL version](https://img.shields.io/badge/PostgreSQL-14_|_15_|_16_|_17_|_18-336791)](https://www.postgresql.org/) [![PostgreSQL version](https://img.shields.io/badge/PostGIS-3.4_|_3.5_|_3.6-5b7b9f)](https://postgis.net/)  
+[![PyPI version](https://img.shields.io/pypi/v/fittrackee?logo=pypi)](https://pypi.org/project/fittrackee/) [![docker image version](https://img.shields.io/docker/v/fittrackee/fittrackee?logo=docker)](https://hub.docker.com/r/fittrackee/fittrackee)  
+[![Coverage Status](https://coveralls.io/repos/github/SamR1/FitTrackee/badge.svg?branch=main)](https://coveralls.io/github/SamR1/FitTrackee?branch=main)<sup><sup>1</sup></sup> [![python pipeline status](https://github.com/SamR1/FitTrackee/actions/workflows/.tests-python.yml/badge.svg)](https://github.com/SamR1/FitTrackee/actions/workflows/.tests-python.yml)  [![python pipeline status](https://codeberg.org/FitTrackee/FitTrackee/badges/workflows/.python-checks.yml/badge.svg?branch=main)](https://codeberg.org/FitTrackee/FitTrackee/actions?workflow=.python-checks.yml) [![javascript pipeline status](https://codeberg.org/FitTrackee/FitTrackee/badges/workflows/.javascript-checks-and-tests.yml/badge.svg?branch=main)](https://codeberg.org/FitTrackee/FitTrackee/actions?workflow=.javascript-checks-and-tests.yml)  
+[![translation status](https://hosted.weblate.org/widgets/fittrackee/-/svg-badge.svg)](https://hosted.weblate.org/engage/fittrackee/)
+[![translation languages](https://hosted.weblate.org/widget/fittrackee/language-badge.svg)](https://hosted.weblate.org/engage/fittrackee/)   
+[![Matrix](https://img.shields.io/badge/chat-%23fittrackee%3Amatrix.org-4cb70e?logo=matrix)](https://matrix.to/#/#fittrackee:matrix.org)
+[![Mastodon Follow](https://img.shields.io/badge/follow%20%40FitTrackee-fff?logo=mastodon)](https://fosstodon.org/@FitTrackee)  
+---
+
+Web application allowing tracking of outdoor activities (workouts) from files, with data on your own server.  
+
+Several mobile apps or devices can store workouts data locally and export them into a file.  
+Examples for Android (non-exhaustive list):  
+* [FitoTrack](https://codeberg.org/jannis/FitoTrack) (GPLv3)  
+* [OpenTracks](https://codeberg.org/OpenTracksApp/OpenTracks) (Apache License)  
+* [OSMAnd](https://github.com/osmandapp/OsmAnd) (GPLv3)  
+* [Runner Up](https://github.com/jonasoreland/runnerup) (GPLv3)  
+
+To get workouts from devices like smartwatches:
+* [Amazfish](https://amazfish.github.io/) (Sailfish OS, GPLv3, integration with FitTrackee from v2.9.0)
+* [Gadgetbridge](https://gadgetbridge.org) (Android, GPLv3, no integration)
+
+It is also possible to add a workout without a file.
+
+Map data from [OpenStreetMap](https://www.openstreetmap.org).  
+
+## Repositories
+
+The main repository is hosted on [Codeberg.org](https://codeberg.org/FitTrackee/FitTrackee).  
+The [Github repository](https://github.com/SamR1/FitTrackee) is a mirror (except for issues and PRs). For now, it is used to run tests, as well as to build and publish Python packages and Docker images using GitHub Actions (see [issue](https://codeberg.org/FitTrackee/FitTrackee/issues/1121)).
+
+## Documentation
+
+- [Features](https://docs.fittrackee.org/en/features/index.html)
+- [Installation instructions](https://docs.fittrackee.org/en/installation/index.html)
+- [Command line interface](https://docs.fittrackee.org/en/cli.html)
+- [Third-party tools](https://docs.fittrackee.org/en/third_party_tools.html)
+- [Changelog](https://docs.fittrackee.org/en/changelog.html)
+- [Troubleshooting](https://docs.fittrackee.org/en/troubleshooting/index.html)
+- [Contributing](https://docs.fittrackee.org/en/contributing.html)
+
+**Under heavy development (some features may be unstable).**  
+(see [provisional roadmap](https://codeberg.org/FitTrackee/FitTrackee/issues/1010), [issues](https://codeberg.org/FitTrackee/FitTrackee/issues) and [documentation](https://docs.fittrackee.org) for more information)  
+
+![FitTrackee Dashboard Screenshot](https://docs.fittrackee.org/en/_images/dashboard.png)
+
+## Translations
+
+FitTrackee uses [Weblate](https://hosted.weblate.org/engage/fittrackee/) for translation management.
+
+Status (on development branch, may differ from the released version):
+
+[![Translation status](https://hosted.weblate.org/widget/fittrackee/multi-auto.svg)](https://hosted.weblate.org/engage/fittrackee/)
+
+---
+
+1: _test coverage: only for Python API and CLI_ 

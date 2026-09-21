@@ -1,0 +1,83 @@
+{
+  "Canoeing": {
+    "LABEL": "Canoa"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "Canoa (acque bianche)"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Ciclismo (Sport)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Ciclismo (Trasporto)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Ciclismo (Trekking)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Cicliscmo (Virtuale)"
+  },
+  "Halfbike": {
+    "LABEL": "Halfbike"
+  },
+  "Hiking": {
+    "LABEL": "Escursioni"
+  },
+  "Kayaking": {
+    "LABEL": "Kayak"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Kayak (acque bianche)"
+  },
+  "Mountain Biking": {
+    "LABEL": "Mountain Biking"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "Mountain Biking (Elettrica)"
+  },
+  "Mountaineering": {
+    "LABEL": "Alpinismo"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Nuoto in acque aperte"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Padel (All'aperto)"
+  },
+  "Paragliding": {
+    "LABEL": "parapendio"
+  },
+  "Rowing": {
+    "LABEL": "Canottaggio"
+  },
+  "Running": {
+    "LABEL": "Corsa"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Sci (Alpino)"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Sci (Cross Country)"
+  },
+  "Snowshoes": {
+    "LABEL": "Racchette da neve"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Stand Up Paddling"
+  },
+  "Swimrun": {
+    "LABEL": "Nuotata"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Tennis (All'aperto)"
+  },
+  "Trail": {
+    "LABEL": "Sentieri"
+  },
+  "Walking": {
+    "LABEL": "Camminata"
+  },
+  "Windsurfing": {
+    "LABEL": "Windsurf"
+  }
+}

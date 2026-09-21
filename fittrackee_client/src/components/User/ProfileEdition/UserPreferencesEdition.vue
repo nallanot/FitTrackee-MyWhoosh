@@ -1,0 +1,883 @@
+<template>
+  <div id="user-preferences-edition">
+    <div class="profile-form form-box">
+      <ErrorMessage :message="errorMessages" v-if="errorMessages" />
+      <form @submit.prevent="updateProfile">
+        <div class="preferences-section">
+          {{ $t('user.PROFILE.INTERFACE') }}
+        </div>
+        <label class="form-items">
+          {{ $t('user.PROFILE.LANGUAGE') }}
+          <select
+            id="language"
+            v-model="userForm.language"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="lang in availableLanguages"
+              :value="lang.value"
+              :key="lang.value"
+            >
+              {{ lang.label }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          {{ $t('user.PROFILE.THEME_MODE.LABEL') }}
+          <select
+            id="use_dark_mode"
+            v-model="userForm.use_dark_mode"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="mode in useDarkMode"
+              :value="mode.value"
+              :key="mode.label"
+            >
+              {{ $t(`user.PROFILE.THEME_MODE.VALUES.${mode.label}`) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          {{ $t('user.PROFILE.TIMEZONE') }}
+          <TimezoneDropdown
+            :input="userForm.timezone"
+            :disabled="authUserLoading"
+            @updateTimezone="(e) => updateValue('timezone', e)"
+          />
+        </label>
+        <label class="form-items">
+          {{ $t('user.PROFILE.DATE_FORMAT') }}
+          <select
+            id="date_format"
+            v-model="userForm.date_format"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="dateFormat in dateFormatOptions"
+              :value="dateFormat.value"
+              :key="dateFormat.value"
+            >
+              {{ dateFormat.label }}
+            </option>
+          </select>
+        </label>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.FIRST_DAY_OF_WEEK') }}
+          </span>
+          <div class="checkboxes">
+            <label v-for="start in weekStart" :key="start.label">
+              <input
+                type="radio"
+                :id="start.label"
+                :name="start.label"
+                :checked="start.value === userForm.weekm"
+                :disabled="authUserLoading"
+                @input="updateValue('weekm', start.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.${start.label}`) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="preferences-section">
+          {{ $t('user.PROFILE.TABS.ACCOUNT') }}
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.FOLLOW_REQUESTS_APPROVAL.LABEL') }}
+          </span>
+          <div class="checkboxes">
+            <label
+              v-for="status in manuallyApprovesFollowersValues"
+              :key="status.label"
+            >
+              <input
+                type="radio"
+                :id="status.label"
+                :name="status.label"
+                :checked="status.value === userForm.manually_approves_followers"
+                :disabled="authUserLoading"
+                @input="
+                  updateValue('manually_approves_followers', status.value)
+                "
+              />
+              <span class="checkbox-label">
+                {{
+                  $t(`user.PROFILE.FOLLOW_REQUESTS_APPROVAL.${status.label}`)
+                }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.PROFILE_IN_USERS_DIRECTORY.LABEL') }}
+          </span>
+          <div class="checkboxes">
+            <label
+              v-for="status in profileInUsersDirectory"
+              :key="status.label"
+            >
+              <input
+                type="radio"
+                :id="`hide_profile_${status.label}`"
+                :name="`hide_profile_${status.label}`"
+                :checked="
+                  status.value === userForm.hide_profile_in_users_directory
+                "
+                :disabled="authUserLoading"
+                @input="
+                  updateValue('hide_profile_in_users_directory', status.value)
+                "
+              />
+              <span class="checkbox-label">
+                {{
+                  $t(`user.PROFILE.PROFILE_IN_USERS_DIRECTORY.${status.label}`)
+                }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="preferences-section">{{ $t('workouts.WORKOUT', 0) }}</div>
+        <label class="form-items">
+          <span> {{ $t('common.TILE_PROVIDERS') }}<sup>1</sup> </span>
+          <select
+            id="default_tile_provider"
+            v-model="userForm.default_tile_provider"
+            :disabled="tileProvidersItems.length < 2 || authUserLoading"
+          >
+            <option
+              v-for="item in tileProvidersItems"
+              :value="item.value"
+              :key="item.value"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+        </label>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.UNITS.LABEL') }}
+          </span>
+          <div class="checkboxes">
+            <label v-for="unit in imperialUnits" :key="unit.label">
+              <input
+                type="radio"
+                :id="unit.label"
+                :name="unit.label"
+                :checked="unit.value === userForm.imperial_units"
+                :disabled="authUserLoading"
+                @input="updateValue('imperial_units', unit.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.UNITS.${unit.label}`) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.ASCENT_DATA') }}
+          </span>
+          <div class="checkboxes">
+            <label v-for="status in ascentData" :key="status.label">
+              <input
+                type="radio"
+                :id="status.label"
+                :name="status.label"
+                :checked="status.value === userForm.display_ascent"
+                :disabled="authUserLoading"
+                @input="updateValue('display_ascent', status.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`common.${status.label}`) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.WORKOUT_CHARTS_DISPLAY.LABEL') }}
+          </span>
+          <div class="checkboxes">
+            <label v-for="data in workoutChartDisplayData" :key="data.label">
+              <input
+                type="radio"
+                :id="data.label"
+                :name="data.label"
+                :checked="data.value === userForm.split_workout_charts"
+                :disabled="authUserLoading"
+                @input="updateValue('split_workout_charts', data.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.WORKOUT_CHARTS_DISPLAY.${data.label}`) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.ELEVATION_CHART_START.LABEL') }}
+          </span>
+          <div class="checkboxes">
+            <label
+              v-for="status in startElevationAtZeroData"
+              :key="status.label"
+            >
+              <input
+                type="radio"
+                :id="status.label"
+                :name="status.label"
+                :checked="status.value === userForm.start_elevation_at_zero"
+                :disabled="authUserLoading"
+                @input="updateValue('start_elevation_at_zero', status.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.ELEVATION_CHART_START.${status.label}`) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.WORKOUT_STATS_FROM_FILE.LABEL') }}<sup>1</sup>
+          </span>
+          <div class="checkboxes">
+            <label v-for="status in workoutStatsFromFile" :key="status.label">
+              <input
+                type="radio"
+                :id="status.label"
+                :name="status.label"
+                :checked="status.value === userForm.workout_stats_from_file"
+                :disabled="authUserLoading"
+                @input="updateValue('workout_stats_from_file', status.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.WORKOUT_STATS_FROM_FILE.${status.label}`) }}
+              </span>
+            </label>
+          </div>
+          <div class="info-box stats-from-file-help">
+            <span>
+              <i class="fa fa-info-circle" aria-hidden="true" />
+              {{ $t('user.PROFILE.WORKOUT_STATS_FROM_FILE.HELP') }}
+            </span>
+          </div>
+        </div>
+        <div class="form-items form-checkboxes">
+          <span class="checkboxes-label">
+            {{ $t('user.PROFILE.USE_RAW_GPX_SPEED.LABEL') }}<sup>1</sup>
+          </span>
+          <div class="checkboxes">
+            <label v-for="status in useRawGpxSpeed" :key="status.label">
+              <input
+                type="radio"
+                :id="status.label"
+                :name="status.label"
+                :checked="status.value === userForm.use_raw_gpx_speed"
+                :disabled="authUserLoading"
+                @input="updateValue('use_raw_gpx_speed', status.value)"
+              />
+              <span class="checkbox-label">
+                {{ $t(`user.PROFILE.USE_RAW_GPX_SPEED.${status.label}`) }}
+              </span>
+            </label>
+          </div>
+          <div class="info-box raw-speed-help">
+            <span>
+              <i class="fa fa-info-circle" aria-hidden="true" />
+              {{ $t('user.PROFILE.USE_RAW_GPX_SPEED.HELP') }}
+            </span>
+          </div>
+        </div>
+        <label class="form-items">
+          <span>
+            {{ $t('user.PROFILE.ELEVATIONS_DATA_SOURCE_LABEL') }}<sup>2</sup>
+          </span>
+          <select
+            id="elevation_data_source"
+            v-model="userForm.elevation_data_source"
+            :disabled="elevationServices.length === 0 || authUserLoading"
+          >
+            <option
+              v-for="item in elevationDataSourcesItems"
+              :value="item"
+              :key="item"
+            >
+              {{ capitalize($t(`workouts.ELEVATION_DATA_SOURCE.${item}`)) }}
+            </option>
+          </select>
+        </label>
+        <div
+          v-if="elevationServices.length === 0"
+          class="info-box missing-elevations-help"
+        >
+          <span>
+            <i class="fa fa-info-circle" aria-hidden="true" />
+            {{ $t('user.PROFILE.NO_ELEVATION_SERVICE_AVAILABLE') }}
+          </span>
+        </div>
+        <label class="form-items">
+          <span>
+            {{ $t('user.PROFILE.ELEVATIONS_PROCESSING.LABEL') }}<sup>2</sup>
+          </span>
+          <select
+            id="elevation_processing"
+            v-model="userForm.elevation_processing"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="item in elevationProcessingItems"
+              :value="item"
+              :key="item"
+            >
+              {{ $t(`user.PROFILE.ELEVATIONS_PROCESSING.${item}`) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span>
+            {{ $t('user.PROFILE.PROCESS_ONLY_MISSING_ELEVATIONS') }}<sup>2</sup>
+          </span>
+          <select
+            id="process_only_missing_elevations"
+            v-model="userForm.process_only_missing_elevations"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="item in onlyMissingElevations"
+              :value="item.value"
+              :key="item.label"
+            >
+              {{ $t(`common.${item.label}`) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span>
+            {{ $t('visibility_levels.WORKOUTS_VISIBILITY') }}<sup>3</sup>
+          </span>
+          <select
+            id="workouts_visibility"
+            v-model="userForm.workouts_visibility"
+            :disabled="authUserLoading"
+            @change="updateAnalysisMapAndMediaVisibility"
+          >
+            <option
+              v-for="level in visibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.MEDIA_VISIBILITY') }}<sup>3</sup>
+          </span>
+          <select
+            id="media_visibility"
+            v-model="userForm.media_visibility"
+            :disabled="authUserLoading"
+            @change="updateMediaVisibility"
+          >
+            <option
+              v-for="level in mediaVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.ANALYSIS_VISIBILITY') }}<sup>3</sup>
+          </span>
+          <select
+            id="analysis_visibility"
+            v-model="userForm.analysis_visibility"
+            :disabled="authUserLoading"
+            @change="updateMapVisibility"
+          >
+            <option
+              v-for="level in analysisVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.MAP_VISIBILITY') }}<sup>3</sup>
+          </span>
+          <select
+            id="map_visibility"
+            v-model="userForm.map_visibility"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="level in mapVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.HR_VISIBILITY') }}
+          </span>
+          <select
+            id="hr_visibility"
+            v-model="userForm.hr_visibility"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="level in visibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.CALORIES_VISIBILITY') }}
+          </span>
+          <select
+            id="calories_visibility"
+            v-model="userForm.calories_visibility"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="level in visibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span>
+            {{ $t('user.PROFILE.SEGMENTS_CREATION_EVENT.LABEL') }}<sup>1</sup>
+          </span>
+          <select
+            id="segments_creation_event"
+            v-model="userForm.segments_creation_event"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="event in segmentsCreationEvents"
+              :value="event"
+              :key="event"
+            >
+              {{ $t(`user.PROFILE.SEGMENTS_CREATION_EVENT.${event}`) }}
+            </option>
+          </select>
+        </label>
+        <div class="info-box events-help">
+          <span>
+            <i class="fa fa-info-circle" aria-hidden="true" />
+            {{ $t('user.PROFILE.SEGMENTS_CREATION_EVENT.HELP') }}
+          </span>
+        </div>
+        <div class="info-box changes-help">
+          <div>
+            1.
+            {{ $t('user.PROFILE.CHANGES_ONLY_TO_NEW_OR_REFRESHED_WORKOUTS') }}
+          </div>
+          <div>
+            2.
+            {{ $t('user.PROFILE.CHANGES_CAN_BE_APPLIED_WHEN_REFRESH_WITH_CLI')
+            }}{{ ' ' }}
+            {{
+              $t(
+                'user.PROFILE.VISIBILITY_LEVELS_CAN_BE_OVERRIDEN_BY_SPORT_PREFERENCES'
+              )
+            }}
+          </div>
+          <div>3. {{ $t('user.PROFILE.CHANGES_ONLY_TO_NEW_WORKOUTS') }}</div>
+        </div>
+        <div class="form-buttons">
+          <button class="confirm" type="submit">
+            {{ $t('buttons.SUBMIT') }}
+          </button>
+          <button
+            class="cancel"
+            @click.prevent="$router.push('/profile/preferences')"
+          >
+            {{ $t('buttons.CANCEL') }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+  import { computed, reactive, onMounted, toRefs, capitalize, watch } from 'vue'
+  import type { ComputedRef, Reactive } from 'vue'
+
+  import TimezoneDropdown from '@/components/User/ProfileEdition/TimezoneDropdown.vue'
+  import useApp from '@/composables/useApp'
+  import useAuthUser from '@/composables/useAuthUser'
+  import useTileProviders from '@/composables/useTileProviders.ts'
+  import { AUTH_USER_STORE } from '@/store/constants'
+  import type { ITileProvider } from '@/types/tileProviders.ts'
+  import type {
+    IUserPreferencesPayload,
+    IAuthUserProfile,
+    TVisibilityLevels,
+  } from '@/types/user'
+  import { useStore } from '@/use/useStore'
+  import { availableDateFormatOptions } from '@/utils/dates'
+  import { availableLanguages, languageLabels } from '@/utils/locales'
+  import {
+    getAllVisibilityLevels,
+    getVisibilityLevels,
+    getUpdatedVisibility,
+  } from '@/utils/visibility_levels'
+
+  interface Props {
+    user: IAuthUserProfile
+  }
+  const props = defineProps<Props>()
+  const { user } = toRefs(props)
+
+  const store = useStore()
+
+  const {
+    elevationServices,
+    elevationDataSourcesItems,
+    elevationProcessingItems,
+    errorMessages,
+  } = useApp()
+  const { authUserLoading } = useAuthUser()
+  const { availableTileProviders } = useTileProviders()
+
+  const weekStart = [
+    {
+      label: 'SUNDAY',
+      value: false,
+    },
+    {
+      label: 'MONDAY',
+      value: true,
+    },
+  ]
+  const imperialUnits = [
+    {
+      label: 'METRIC',
+      value: false,
+    },
+    {
+      label: 'IMPERIAL',
+      value: true,
+    },
+  ]
+  const ascentData = [
+    {
+      label: 'DISPLAYED',
+      value: true,
+    },
+    {
+      label: 'HIDDEN',
+      value: false,
+    },
+  ]
+  const startElevationAtZeroData = [
+    {
+      label: 'ZERO',
+      value: true,
+    },
+    {
+      label: 'MIN_ALT',
+      value: false,
+    },
+  ]
+  const workoutChartDisplayData = [
+    {
+      label: 'MULTIPLE',
+      value: true,
+    },
+    {
+      label: 'ONE',
+      value: false,
+    },
+  ]
+  const useRawGpxSpeed = [
+    {
+      label: 'FILTERED_SPEED',
+      value: false,
+    },
+    {
+      label: 'RAW_SPEED',
+      value: true,
+    },
+  ]
+  const useDarkMode = [
+    {
+      label: 'DARK',
+      value: true,
+    },
+    {
+      label: 'DEFAULT',
+      value: null,
+    },
+    {
+      label: 'LIGHT',
+      value: false,
+    },
+  ]
+  const manuallyApprovesFollowersValues = [
+    {
+      label: 'MANUALLY',
+      value: true,
+    },
+    {
+      label: 'AUTOMATICALLY',
+      value: false,
+    },
+  ]
+  const profileInUsersDirectory = [
+    {
+      label: 'HIDDEN',
+      value: true,
+    },
+    {
+      label: 'DISPLAYED',
+      value: false,
+    },
+  ]
+  const segmentsCreationEvents = ['all', 'only_manual', 'none']
+  const workoutStatsFromFile = [
+    {
+      label: 'CALCULATED',
+      value: false,
+    },
+    {
+      label: 'FROM_FILE',
+      value: true,
+    },
+  ]
+  const tileProvidersItems = computed(() =>
+    availableTileProviders.value.map((provider) => ({
+      label: provider.name,
+      value: provider.id,
+    }))
+  )
+  const tileProvider: ComputedRef<ITileProvider | undefined> = computed(() =>
+    availableTileProviders.value.find((provider) => provider.default_for_user)
+  )
+  const onlyMissingElevations = [
+    {
+      label: 'YES',
+      value: true,
+    },
+    {
+      label: 'NO',
+      value: false,
+    },
+  ]
+
+  const userForm: Reactive<IUserPreferencesPayload> = reactive({
+    analysis_visibility: 'private',
+    calories_visibility: 'private',
+    date_format: 'dd/MM/yyyy',
+    default_tile_provider: 'osm',
+    display_ascent: true,
+    elevation_data_source: 'file',
+    elevation_processing: 'none',
+    hide_profile_in_users_directory: true,
+    hr_visibility: 'private',
+    imperial_units: false,
+    language: 'en',
+    manually_approves_followers: true,
+    map_visibility: 'private',
+    media_visibility: 'private',
+    process_only_missing_elevations: true,
+    split_workout_charts: false,
+    segments_creation_event: 'only_manual',
+    start_elevation_at_zero: false,
+    timezone: 'Europe/Paris',
+    use_dark_mode: false,
+    use_raw_gpx_speed: false,
+    weekm: false,
+    workout_stats_from_file: false,
+    workouts_visibility: 'private',
+  })
+
+  const dateFormatOptions: ComputedRef<Record<string, string>[]> = computed(
+    () =>
+      availableDateFormatOptions(
+        new Date().toUTCString(),
+        user.value.timezone,
+        userForm.language
+      )
+  )
+  const visibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getAllVisibilityLevels()
+  )
+  const analysisVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(
+    () => getVisibilityLevels(userForm.workouts_visibility)
+  )
+  const mapVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getVisibilityLevels(userForm.analysis_visibility)
+  )
+  const mediaVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getVisibilityLevels(userForm.workouts_visibility)
+  )
+
+  function updateUserForm(user: IAuthUserProfile) {
+    userForm.analysis_visibility = user.analysis_visibility ?? 'private'
+    userForm.display_ascent = user.display_ascent
+    userForm.start_elevation_at_zero = user.start_elevation_at_zero ?? false
+    userForm.use_raw_gpx_speed = user.use_raw_gpx_speed ?? false
+    userForm.imperial_units = user.imperial_units ?? false
+    userForm.language =
+      user.language && user.language in languageLabels ? user.language : 'en'
+    userForm.manually_approves_followers =
+      'manually_approves_followers' in user
+        ? user.manually_approves_followers
+        : true
+    userForm.map_visibility = user.map_visibility ?? 'private'
+    userForm.timezone = user.timezone ?? 'Europe/Paris'
+    userForm.date_format = user.date_format ?? 'dd/MM/yyyy'
+    userForm.weekm = user.weekm ?? false
+    userForm.use_dark_mode = user.use_dark_mode
+    userForm.workouts_visibility = user.workouts_visibility ?? 'private'
+    userForm.hide_profile_in_users_directory =
+      user.hide_profile_in_users_directory
+    userForm.hr_visibility = user.hr_visibility ?? 'private'
+    userForm.segments_creation_event =
+      user.segments_creation_event ?? 'only_manual'
+    userForm.split_workout_charts = user.split_workout_charts
+    userForm.elevation_data_source = user.elevation_data_source
+    userForm.elevation_processing = user.elevation_processing
+    userForm.process_only_missing_elevations =
+      user.process_only_missing_elevations
+    userForm.media_visibility = user.media_visibility ?? 'private'
+    userForm.workout_stats_from_file = user.workout_stats_from_file
+    userForm.default_tile_provider = availableTileProviders.value.some(
+      (provider) => provider.id === user.default_tile_provider
+    )
+      ? user.default_tile_provider
+      : tileProvider.value?.id || ''
+  }
+  function updateProfile() {
+    store.dispatch(AUTH_USER_STORE.ACTIONS.UPDATE_USER_PREFERENCES, userForm)
+  }
+  function updateValue(key: string, value: string | boolean) {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    userForm[key] = value
+  }
+  function updateAnalysisMapAndMediaVisibility() {
+    userForm.analysis_visibility = getUpdatedVisibility(
+      userForm.analysis_visibility,
+      userForm.workouts_visibility
+    )
+    updateMapVisibility()
+    updateMediaVisibility()
+  }
+  function updateMapVisibility() {
+    userForm.map_visibility = getUpdatedVisibility(
+      userForm.map_visibility,
+      userForm.analysis_visibility
+    )
+  }
+  function updateMediaVisibility() {
+    userForm.media_visibility = getUpdatedVisibility(
+      userForm.media_visibility,
+      userForm.workouts_visibility
+    )
+  }
+
+  watch(
+    () => tileProvider?.value,
+    () => {
+      if (user.value) {
+        updateUserForm(user.value)
+      }
+    }
+  )
+
+  onMounted(() => {
+    if (user.value) {
+      updateUserForm(user.value)
+    }
+  })
+</script>
+
+<style lang="scss" scoped>
+  @use '~@/scss/vars.scss' as *;
+  #user-preferences-edition {
+    padding-top: $default-padding;
+    .form-items {
+      padding-top: $default-padding * 0.5;
+    }
+
+    .form-checkboxes {
+      .checkboxes-label {
+        font-weight: bold;
+      }
+      .checkboxes {
+        display: flex;
+        gap: 0 $default-padding;
+        flex-wrap: wrap;
+        .checkbox-label {
+          padding-left: $default-padding * 0.5;
+        }
+        label {
+          font-weight: normal;
+        }
+      }
+    }
+
+    .preferences-section {
+      font-weight: bold;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--card-border-color);
+      margin-bottom: $default-padding * 0.5;
+    }
+    .preferences-section:not(:first-child) {
+      margin-top: $default-padding * 1.5;
+    }
+
+    #language,
+    #date_format,
+    #use_dark_mode,
+    #map_visibility,
+    #analysis_visibility,
+    #workouts_visibility,
+    #hr_visibility,
+    #calories_visibility,
+    #media_visibility,
+    #segments_creation_event,
+    #elevation_data_source,
+    #elevation_processing,
+    #process_only_missing_elevations,
+    #default_tile_provider {
+      padding: $default-padding * 0.5;
+    }
+
+    .missing-elevations-help,
+    .events-help {
+      margin-top: $default-margin * 0.5;
+    }
+    .changes-help {
+      margin-top: $default-margin * 2.5;
+      margin-bottom: -$default-margin;
+    }
+  }
+</style>

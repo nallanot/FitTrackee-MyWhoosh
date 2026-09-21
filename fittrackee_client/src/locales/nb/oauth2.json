@@ -1,0 +1,28 @@
+{
+  "ADD_A_NEW_APP": "Legg til en ny OAuth2-applikasjon",
+  "APP": {
+    "CLIENT_ID": "ID",
+    "CLIENT_SECRET": "Hemmelinghet",
+    "DESCRIPTION": "Applikasjonsbeskrivelse",
+    "ISSUE_AT": "utstedt den",
+    "NAME": "Programnavn",
+    "REDIRECT_URL": "Videresendelse Link",
+    "SCOPE": {
+      "LABEL": "Omfang",
+      "application:write_DESCRIPTION": "gir skrivetilgang til programkonfigurasjonen.",
+      "profile:write_DESCRIPTION": "innvilger skrivetilgang til <code>auth</code>-endepunkter.",
+      "workouts:read_DESCRIPTION": "innvilger lesetilgang til <code>workouts</code>-endepunkter."
+    },
+    "URL": "Programnettadresse"
+  },
+  "APP_DELETION_CONFIRMATION": "Slett programmet?",
+  "APP_REQUESTING_ACCESS": "{0}-programmet kjører:",
+  "COPY_TO_CLIPBOARD": "kopier til utklippstavlen",
+  "DELETE_APP": "Slett program",
+  "NEW_APP": "Legg til et program",
+  "NO_APP": "Fant ikke program!",
+  "NO_APPS": "ingen programmer",
+  "REVOKE_ALL_TOKENS": "Tilbakekall alle symboler",
+  "TOKENS_REVOCATION_CONFIRMATION": "Tilbakekall alle symboler?",
+  "TOKENS_REVOKED": "Alle eksisterende tilknyttede symbol tilbakekalt."
+}

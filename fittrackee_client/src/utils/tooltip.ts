@@ -1,0 +1,41 @@
+import type { TStatisticsDatasetKeys } from '@/types/statistics'
+import { formatDuration } from '@/utils/duration'
+import { getPaceFromTotalSeconds, units } from '@/utils/units'
+
+export const formatTooltipValue = (
+  displayedData: TStatisticsDatasetKeys,
+  value: number,
+  useImperialUnits: boolean,
+  formatWithUnits = true,
+  unitFrom = 'km'
+): string => {
+  const unitTo =
+    useImperialUnits && unitFrom in units
+      ? units[unitFrom].defaultTarget
+      : unitFrom
+  switch (displayedData) {
+    case 'average_speed':
+      return `${value.toFixed(2)} ${unitTo}/h`
+    case 'average_duration':
+    case 'total_duration':
+      return formatDuration(value, { formatWithUnits })
+    case 'average_pace':
+      return `${getPaceFromTotalSeconds(value, useImperialUnits)} min/${unitTo}`
+    case 'average_distance':
+    case 'average_ascent':
+    case 'average_descent':
+    case 'total_distance':
+    case 'total_ascent':
+    case 'total_descent':
+      return `${value.toFixed(2)} ${unitTo}`
+    case 'total_calories':
+      return `${value} ${unitFrom}`
+    case 'average_cadence':
+      if (unitFrom) {
+        return `${value} ${unitFrom}`
+      }
+      return value.toString()
+    default:
+      return value.toString()
+  }
+}

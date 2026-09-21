@@ -1,0 +1,89 @@
+{
+  "Canoeing": {
+    "LABEL": "Kanoën"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "Kanoën (Wildwater)"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Fietsen (Sport)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Fietsen (Transport)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Fietsen (Trekking)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Fietsen (Virtueel)"
+  },
+  "Halfbike": {
+    "LABEL": "Halfbike"
+  },
+  "Hiking": {
+    "LABEL": "Trektocht"
+  },
+  "Ice Skating": {
+    "LABEL": "Schaatsen"
+  },
+  "Inline Skating": {
+    "LABEL": "Skaten"
+  },
+  "Kayaking": {
+    "LABEL": "Kajakken"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Kajakken (Wildwater)"
+  },
+  "Mountain Biking": {
+    "LABEL": "Mountainbiken"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "Mountainbiken (Elektrisch)"
+  },
+  "Mountaineering": {
+    "LABEL": "Bergbeklimmen"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Zwemmen (open water)"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Padel (Buiten)"
+  },
+  "Paragliding": {
+    "LABEL": "Paragliden"
+  },
+  "Rowing": {
+    "LABEL": "Roeien"
+  },
+  "Running": {
+    "LABEL": "Hardlopen"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Skiën (Alpine)"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Skiën (Cross Country)"
+  },
+  "Snowshoes": {
+    "LABEL": "Sneeuwschoenen"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Standup Paddleboarding (SUP)"
+  },
+  "Swimrun": {
+    "LABEL": "Zwemloop"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Tennis (Buiten)"
+  },
+  "Trail": {
+    "LABEL": "Traillopen"
+  },
+  "Walking": {
+    "LABEL": "Wandelen"
+  },
+  "Windsurfing": {
+    "LABEL": "Windsurfen"
+  }
+}

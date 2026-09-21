@@ -1,0 +1,25 @@
+{
+  "AVERAGE": "prosječno",
+  "DATES": "Datumi",
+  "STATISTICS": "Statistika",
+  "STATISTICS_CHARTS": {
+    "day": "Dnevna statistika",
+    "month": "Mjesečna statistika",
+    "week": "Tjedna statistika",
+    "year": "Godišnja statistika"
+  },
+  "STATISTICS_ON_ALL_WORKOUTS": "Statistika svih aktivnosti:",
+  "STATISTICS_ON_LAST_WORKOUTS": "Statistika zadnjih {count} aktivnosti:",
+  "STATISTICS_TYPE": "Vrsta statistike",
+  "STATISTICS_TYPES": {
+    "by_sport": "po sportu",
+    "by_time": "po vremenskom razdoblju"
+  },
+  "TIME_FRAMES": {
+    "day": "dan",
+    "month": "mjesec",
+    "week": "tjedan",
+    "year": "godina"
+  },
+  "WORKOUTS_AVERAGE": "prosječan broj aktivnosti"
+}

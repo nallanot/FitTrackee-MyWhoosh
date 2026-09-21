@@ -1,0 +1,584 @@
+import secrets
+from typing import TYPE_CHECKING
+from unittest.mock import patch
+
+import pytest
+from click.testing import CliRunner
+
+from fittrackee import bcrypt, db
+from fittrackee.cli import cli
+from fittrackee.users.models import User
+from fittrackee.users.roles import UserRole
+
+from ..mixins import RandomMixin, UserTaskMixin
+
+if TYPE_CHECKING:
+    from _pytest.logging import LogCaptureFixture
+    from flask import Flask
+
+
+class TestCliUserCreate(RandomMixin):
+    def test_it_displays_error_when_user_exists_with_same_username(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                user_1.username,
+                "--email",
+                self.random_email(),
+                "--password",
+                self.random_string(),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert (
+            result.output
+            == "Error(s) occurred:\nsorry, that username is already taken\n"
+        )
+
+    def test_it_displays_error_when_user_exists_with_same_email(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                self.random_string(),
+                "--email",
+                user_1.email,
+                "--password",
+                self.random_string(),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert result.output == (
+            "Error(s) occurred:\nThis user already exists. No action done.\n"
+        )
+
+    def test_it_creates_user(
+        self,
+        app: "Flask",
+    ) -> None:
+        username = self.random_string()
+        email = self.random_email()
+        password = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                email,
+                "--password",
+                password,
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert f"User '{username}' created.\n" in result.output
+        user = User.query.filter_by(username=username).one()
+        assert user.is_active is True
+        assert user.email == email
+        assert bcrypt.check_password_hash(user.password, password)
+        assert user.role == UserRole.USER.value
+        assert (
+            user.default_tile_provider == app.config["default_tile_provider"]
+        )
+
+    def test_it_displays_password_when_password_is_not_provided(
+        self,
+        app: "Flask",
+    ) -> None:
+        username = self.random_string()
+        email = self.random_email()
+        password = self.random_string()
+        runner = CliRunner()
+
+        with patch.object(secrets, "token_urlsafe", return_value=password):
+            result = runner.invoke(
+                cli,
+                ["users", "create", username, "--email", email],
+            )
+
+        assert result.exit_code == 0
+        assert f"The user password is: {password}\n" in result.output
+        user = User.query.filter_by(username=username).one()
+        assert user.is_active is True
+        assert user.email == email
+        assert bcrypt.check_password_hash(user.password, password)
+
+    def test_it_creates_user_with_default_language(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            ["users", "create", username, "--email", self.random_email()],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.language == "en"
+        assert (
+            "The user preference for interface language is: en"
+            in result.output
+        )
+
+    def test_it_creates_user_with_provided_language(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        language = "fr"
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                self.random_email(),
+                "--lang",
+                language,
+            ],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.language == language
+        assert (
+            f"The user preference for interface language is: {language}"
+            not in result.output
+        )
+
+    def test_it_creates_user_with_default_language_when_not_supported(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                self.random_email(),
+                "--lang",
+                "invalid",
+            ],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.language == "en"
+        assert (
+            "The user preference for interface language is: en"
+            in result.output
+        )
+
+    def test_it_creates_user_with_default_timezone(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            ["users", "create", username, "--email", self.random_email()],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.timezone == "Europe/Paris"
+        assert (
+            "The user preference for timezone is: Europe/Paris"
+            in result.output
+        )
+
+    def test_it_creates_user_with_provided_timezone(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        tz = "America/New_York"
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                self.random_email(),
+                "--tz",
+                tz,
+            ],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.timezone == tz
+        assert (
+            f"The user preference for timezone is: {tz}" not in result.output
+        )
+
+    def test_it_creates_user_with_default_timezone_when_invalid(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                self.random_email(),
+                "--tz",
+                "invalid",
+            ],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.timezone == "Europe/Paris"
+        assert (
+            "The user preference for timezone is: Europe/Paris"
+            in result.output
+        )
+
+    def test_it_creates_user_with_provided_role(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                username,
+                "--email",
+                self.random_email(),
+                "--role",
+                "owner",
+            ],
+        )
+
+        user = User.query.filter_by(username=username).one()
+        assert user.role == UserRole.OWNER.value
+
+    def test_it_displays_error_when_role_is_invalid(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "create",
+                self.random_string(),
+                "--email",
+                user_1.email,
+                "--role",
+                "invalid",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert (
+            "Invalid value for '--role': 'invalid' is not one of "
+            "'owner', 'admin', 'moderator', 'user'."
+        ) in result.output
+
+
+class TestCliUserUpdate(RandomMixin):
+    def test_it_returns_error_when_missing_user_name(
+        self, app: "Flask"
+    ) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(cli, ["users", "update"])
+
+        assert result.exit_code == 2
+        assert "Error: Missing argument 'USERNAME'." in result.output
+
+    def test_it_display_error_when_user_not_found(self, app: "Flask") -> None:
+        username = self.random_string()
+        runner = CliRunner()
+
+        result = runner.invoke(cli, ["users", "update", username])
+
+        assert result.exit_code == 0
+        assert f"User '{username}' not found." in result.output
+
+    def test_it_does_not_update_user_when_no_options_provided(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+        previous_email = user_1.email
+        previous_password = user_1.password
+
+        result = runner.invoke(cli, ["users", "update", user_1.username])
+
+        assert result.exit_code == 0
+        assert "No updates." in result.output
+        db.session.refresh(user_1)
+        assert user_1.role == UserRole.USER.value
+        assert user_1.is_active is True
+        assert user_1.email == previous_email
+        assert user_1.password == previous_password
+
+    def test_it_sets_role(self, app: "Flask", user_1: "User") -> None:
+        runner = CliRunner()
+        previous_email = user_1.email
+        previous_password = user_1.password
+
+        with app.app_context():
+            result = runner.invoke(
+                cli,
+                ["users", "update", user_1.username, "--set-role", "admin"],
+            )
+
+        assert result.exit_code == 0
+        db.session.refresh(user_1)
+        assert f"User '{user_1.username}' updated." in result.output
+        assert user_1.role == UserRole.ADMIN.value
+        # unchanged values
+        assert user_1.is_active is True
+        assert user_1.email == previous_email
+        assert user_1.password == previous_password
+
+    @pytest.mark.parametrize(
+        "input_role,input_active",
+        [
+            ("user", False),
+            ("moderator", True),
+            ("admin", True),
+            ("owner", True),
+        ],
+    )
+    def test_it_activates_user_only_when_role_is_not_user(
+        self,
+        app: "Flask",
+        inactive_user: "User",
+        input_role: str,
+        input_active: bool,
+    ) -> None:
+        runner = CliRunner()
+
+        with app.app_context():
+            runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    inactive_user.username,
+                    "--set-role",
+                    input_role,
+                ],
+            )
+
+        db.session.refresh(inactive_user)
+        assert inactive_user.role == UserRole[input_role.upper()].value
+        assert inactive_user.is_active == input_active
+
+    def test_it_activates_user(
+        self, app: "Flask", inactive_user: "User"
+    ) -> None:
+        runner = CliRunner()
+        previous_email = inactive_user.email
+        previous_password = inactive_user.password
+
+        with app.app_context():
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    inactive_user.username,
+                    "--activate",
+                ],
+            )
+
+        assert result.exit_code == 0
+        db.session.refresh(inactive_user)
+        assert f"User '{inactive_user.username}' updated." in result.output
+        assert inactive_user.is_active is True
+        # unchanged values
+        assert inactive_user.role == UserRole.USER.value
+        assert inactive_user.email == previous_email
+        assert inactive_user.password == previous_password
+
+    def test_it_resets_password(self, app: "Flask", user_1: "User") -> None:
+        runner = CliRunner()
+        previous_email = user_1.email
+        new_password = self.random_string()
+
+        with (
+            app.app_context(),
+            patch.object(secrets, "token_urlsafe", return_value=new_password),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    user_1.username,
+                    "--reset-password",
+                ],
+            )
+
+        assert result.exit_code == 0
+        db.session.refresh(user_1)
+        assert f"User '{user_1.username}' updated." in result.output
+        assert f"The new password is: {new_password}" in result.output
+        assert bcrypt.check_password_hash(user_1.password, new_password)
+        # unchanged values
+        assert user_1.role == UserRole.USER.value
+        assert user_1.is_active is True
+        assert user_1.email == previous_email
+
+    def test_it_updates_email(self, app: "Flask", user_1: "User") -> None:
+        runner = CliRunner()
+        previous_password = user_1.password
+        new_email = self.random_email()
+
+        with app.app_context():
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    user_1.username,
+                    "--update-email",
+                    new_email,
+                ],
+            )
+
+        assert result.exit_code == 0
+        db.session.refresh(user_1)
+        assert f"User '{user_1.username}' updated." in result.output
+        assert user_1.email == new_email
+        # unchanged values
+        assert user_1.role == UserRole.USER.value
+        assert user_1.is_active is True
+        assert user_1.password == previous_password
+
+    def test_it_displays_error_when_email_is_invalid(
+        self, app: "Flask", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+
+        with app.app_context():
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    user_1.username,
+                    "--update-email",
+                    self.random_string(),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert (
+            result.output
+            == "An error occurred: valid email must be provided\n"
+        )
+
+    def test_it_updates_user(
+        self, app: "Flask", inactive_user: "User"
+    ) -> None:
+        runner = CliRunner()
+        previous_password = inactive_user.password
+        new_email = self.random_email()
+
+        with app.app_context():
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "update",
+                    inactive_user.username,
+                    "--update-email",
+                    new_email,
+                    "--set-role",
+                    "admin",
+                ],
+            )
+
+        assert result.exit_code == 0
+        db.session.refresh(inactive_user)
+        assert f"User '{inactive_user.username}' updated." in result.output
+        assert inactive_user.email == new_email
+        assert inactive_user.role == UserRole.ADMIN.value
+        assert inactive_user.is_active is True
+        assert inactive_user.password == previous_password
+
+
+class TestCliUserDataExportTask(RandomMixin, UserTaskMixin):
+    def test_it_raises_error_when_process_workouts_archives_upload_raisies_exceptio(  # noqa
+        self, app: "Flask", caplog: "LogCaptureFixture", user_1: "User"
+    ) -> None:
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "users",
+                "export_archive",
+                "--id",
+                self.random_short_id(),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert len(caplog.records) == 1
+        assert caplog.records[0].message == "No task found"
+
+    def test_it_calls_process_workouts_archive_upload(
+        self,
+        app: "Flask",
+        user_1: "User",
+        caplog: "LogCaptureFixture",
+    ) -> None:
+        export_task = self.create_user_data_export_task(user_1)
+        runner = CliRunner()
+
+        with patch(
+            "fittrackee.users.commands.process_queued_data_export",
+        ) as process_queued_data_export_mock:
+            result = runner.invoke(
+                cli,
+                [
+                    "users",
+                    "export_archive",
+                    "--id",
+                    export_task.short_id,
+                ],
+            )
+
+        process_queued_data_export_mock.assert_called_once_with(
+            export_task.short_id
+        )
+
+        assert result.exit_code == 0
+        assert caplog.records[0].message == "\nDone."

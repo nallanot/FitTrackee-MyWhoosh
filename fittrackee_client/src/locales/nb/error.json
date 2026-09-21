@@ -1,0 +1,14 @@
+{
+  "APP_ERROR": "Applikasjonen ser ut til å ha støtt på noen problemer.<br />Vennligst prøv igjen senere eller kontakt administratoren.",
+  "ERRORS_ENCOUNTERED": "Feil har oppstått",
+  "NOT_FOUND": {
+    "COMMENT": "Kommentar ikke funnet",
+    "PAGE": "Side ikke funnet",
+    "REPORT": "Rapport ikke funnet",
+    "SEGMENT": "Segment ikke funnet",
+    "USER": "Bruker ikke funnet",
+    "WORKOUT": "Treningsøkt ikke funnet"
+  },
+  "SOMETHING_WRONG": "Noe gikk galt",
+  "UNKNOWN": "Feil. Vennligst prøv igjen eller kontakt administratoren."
+}

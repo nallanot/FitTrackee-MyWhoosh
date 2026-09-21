@@ -1,0 +1,75 @@
+import type { GetterTree } from 'vuex'
+
+import { WORKOUTS_STORE } from '@/store/constants'
+import type { IRootState } from '@/store/modules/root/types'
+import type {
+  IWorkoutsGetters,
+  IWorkoutsState,
+} from '@/store/modules/workouts/types'
+
+export const getters: GetterTree<IWorkoutsState, IRootState> &
+  IWorkoutsGetters = {
+  [WORKOUTS_STORE.GETTERS.APPEAL_LOADING]: (state: IWorkoutsState) => {
+    return state.appealLoading
+  },
+  [WORKOUTS_STORE.GETTERS.CALENDAR_WORKOUTS]: (state: IWorkoutsState) => {
+    return state.calendar_workouts
+  },
+  [WORKOUTS_STORE.GETTERS.CURRENT_REPORTING]: (state: IWorkoutsState) => {
+    return state.workoutData.currentReporting
+  },
+  [WORKOUTS_STORE.GETTERS.SUCCESS]: (state: IWorkoutsState) => {
+    return state.success
+  },
+  [WORKOUTS_STORE.GETTERS.TIMELINE_WORKOUTS]: (state: IWorkoutsState) => {
+    return state.timeline_workouts
+  },
+  [WORKOUTS_STORE.GETTERS.AUTH_USER_WORKOUTS]: (state: IWorkoutsState) => {
+    return state.user_workouts
+  },
+  [WORKOUTS_STORE.GETTERS.AUTH_USER_WORKOUTS_COLLECTION]: (
+    state: IWorkoutsState
+  ) => {
+    return state.user_workouts_collection
+  },
+  [WORKOUTS_STORE.GETTERS.AUTH_USER_WORKOUTS_HEATMAP]: (
+    state: IWorkoutsState
+  ) => {
+    return state.user_workouts_heatmap
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUT_CONTENT_EDITION]: (state: IWorkoutsState) => {
+    return state.workoutContent
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUT_DATA]: (state: IWorkoutsState) => {
+    return state.workoutData
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUTS_PAGINATION]: (state: IWorkoutsState) => {
+    return state.pagination
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUTS_STATISTICS]: (state: IWorkoutsState) => {
+    return state.user_workouts_statistics
+  },
+  [WORKOUTS_STORE.GETTERS.GEOCODE_LOADING]: (state: IWorkoutsState) => {
+    return state.geocodeLoading
+  },
+  [WORKOUTS_STORE.GETTERS.MAP_LOADING]: (state: IWorkoutsState) => {
+    return state.mapLoading
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUT_GEOJSON]: (state: IWorkoutsState) => {
+    return state.workoutData.geojson
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUT_MEDIA_LOADING]: (state: IWorkoutsState) => {
+    return state.workoutData.mediaLoading
+  },
+  [WORKOUTS_STORE.GETTERS.WORKOUT_MEDIA_ATTACHMENTS]: (
+    state: IWorkoutsState
+  ) => {
+    return state.workoutData.mediaAttachments
+  },
+  [WORKOUTS_STORE.GETTERS.DISPLAYED_MEDIA_INDEX]: (state: IWorkoutsState) => {
+    return state.workoutData.displayedMediaIndex
+  },
+  [WORKOUTS_STORE.GETTERS.IS_EDITING_MEDIA]: (state: IWorkoutsState) => {
+    return state.workoutData.isEditingMedia
+  },
+}

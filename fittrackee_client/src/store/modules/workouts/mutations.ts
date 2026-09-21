@@ -1,0 +1,270 @@
+import type { GeoJSON } from 'geojson'
+import type { MutationTree } from 'vuex'
+
+import { WORKOUTS_STORE } from '@/store/constants'
+import type {
+  IWorkoutsState,
+  TWorkoutsMutations,
+} from '@/store/modules/workouts/types'
+import type { IPagination } from '@/types/api'
+import type { IWorkoutsFeatureCollection } from '@/types/geojson.ts'
+import type { IHeatmapCells } from '@/types/map.ts'
+import type {
+  IComment,
+  ICurrentCommentEdition,
+  IMediaAttachment,
+  IWorkout,
+  IWorkoutApiChartData,
+  IWorkoutContentType,
+  TWorkoutsStatistics,
+} from '@/types/workouts'
+
+export const mutations: MutationTree<IWorkoutsState> & TWorkoutsMutations = {
+  [WORKOUTS_STORE.MUTATIONS.ADD_TIMELINE_WORKOUTS](
+    state: IWorkoutsState,
+    workouts: IWorkout[]
+  ) {
+    state.timeline_workouts = state.timeline_workouts.concat(workouts)
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_APPEAL_LOADING](
+    state: IWorkoutsState,
+    loading: null | string
+  ) {
+    state.appealLoading = loading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_CALENDAR_WORKOUTS](
+    state: IWorkoutsState,
+    workouts: IWorkout[]
+  ) {
+    state.calendar_workouts = workouts
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_SUCCESS](
+    state: IWorkoutsState,
+    success: null | string
+  ) {
+    state.success = success
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_TIMELINE_WORKOUTS](
+    state: IWorkoutsState,
+    workouts: IWorkout[]
+  ) {
+    state.timeline_workouts = workouts
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_USER_WORKOUTS](
+    state: IWorkoutsState,
+    workouts: IWorkout[]
+  ) {
+    state.user_workouts = workouts
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_USER_WORKOUTS_COLLECTION](
+    state: IWorkoutsState,
+    featureCollection: IWorkoutsFeatureCollection
+  ) {
+    state.user_workouts_collection = featureCollection
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_USER_WORKOUTS_HEATMAP](
+    state: IWorkoutsState,
+    cells: IHeatmapCells
+  ) {
+    state.user_workouts_heatmap = cells
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUTS_PAGINATION](
+    state: IWorkoutsState,
+    pagination: IPagination
+  ) {
+    state.pagination = pagination
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUTS_STATISTICS](
+    state: IWorkoutsState,
+    stats: TWorkoutsStatistics
+  ) {
+    state.user_workouts_statistics = stats
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT](
+    state: IWorkoutsState,
+    workout: IWorkout
+  ) {
+    state.workoutData.workout = workout
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_CHART_DATA](
+    state: IWorkoutsState,
+    chartData: IWorkoutApiChartData[]
+  ) {
+    state.workoutData.chartData = chartData
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_CHART_DATA_LOADING](
+    state: IWorkoutsState,
+    loading: boolean
+  ) {
+    state.workoutData.chartDataLoading = loading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_GEOJSON](
+    state: IWorkoutsState,
+    geojson: GeoJSON
+  ) {
+    state.workoutData.geojson = geojson
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_LOADING](
+    state: IWorkoutsState,
+    loading: boolean
+  ) {
+    state.workoutData.loading = loading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_CONTENT](
+    state: IWorkoutsState,
+    workout: IWorkout
+  ) {
+    state.workoutData.workout = workout
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_CONTENT_LOADING](
+    state: IWorkoutsState,
+    loading: boolean
+  ) {
+    state.workoutContent.loading = loading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_CONTENT_TYPE](
+    state: IWorkoutsState,
+    contentType: IWorkoutContentType | ''
+  ) {
+    state.workoutContent.contentType = contentType
+  },
+  [WORKOUTS_STORE.MUTATIONS.EMPTY_CALENDAR_WORKOUTS](state: IWorkoutsState) {
+    state.calendar_workouts = []
+  },
+  [WORKOUTS_STORE.MUTATIONS.EMPTY_WORKOUTS](state: IWorkoutsState) {
+    state.calendar_workouts = []
+    state.user_workouts = []
+    state.timeline_workouts = []
+  },
+  [WORKOUTS_STORE.MUTATIONS.EMPTY_WORKOUT](state: IWorkoutsState) {
+    state.workoutData = {
+      geojson: null,
+      gpx: '',
+      loading: false,
+      workout: <IWorkout>{},
+      chartData: [],
+      chartDataLoading: false,
+      comments: [],
+      commentsLoading: null,
+      currentCommentEdition: <ICurrentCommentEdition>{},
+      currentReporting: false,
+      refreshLoading: false,
+      elevationLoading: false,
+      mediaAttachments: [],
+      isEditingMedia: false,
+      mediaLoading: '',
+      displayedMediaIndex: undefined,
+    }
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_COMMENTS](
+    state: IWorkoutsState,
+    comments: IComment[]
+  ) {
+    state.workoutData.comments = comments
+  },
+  [WORKOUTS_STORE.MUTATIONS.ADD_WORKOUT_COMMENT](
+    state: IWorkoutsState,
+    comment: IComment
+  ) {
+    state.workoutData.comments.push(comment)
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_COMMENT_LOADING](
+    state: IWorkoutsState,
+    commentId: string | null
+  ) {
+    state.workoutData.commentsLoading = commentId
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_CURRENT_COMMENT_EDITION](
+    state: IWorkoutsState,
+    currentCommentEdition: ICurrentCommentEdition
+  ) {
+    state.workoutData.currentCommentEdition = currentCommentEdition
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_CURRENT_REPORTING](
+    state: IWorkoutsState,
+    currentReporting: boolean
+  ) {
+    state.workoutData.currentReporting = currentReporting
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_REFRESH_LOADING](
+    state: IWorkoutsState,
+    refreshLoading: boolean
+  ) {
+    state.workoutData.refreshLoading = refreshLoading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_GEOCODE_LOADING](
+    state: IWorkoutsState,
+    geocodeLoading: boolean
+  ) {
+    state.geocodeLoading = geocodeLoading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_MAP_LOADING](
+    state: IWorkoutsState,
+    mapLoading: boolean
+  ) {
+    state.mapLoading = mapLoading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_ELEVATION_DATA_LOADING](
+    state: IWorkoutsState,
+    elevationLoading: boolean
+  ) {
+    state.workoutData.elevationLoading = elevationLoading
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_MEDIA_LOADING](
+    state: IWorkoutsState,
+    mediaLoading: string
+  ) {
+    state.workoutData.mediaLoading = mediaLoading
+  },
+  [WORKOUTS_STORE.MUTATIONS.ADD_WORKOUT_MEDIA_ATTACHMENT](
+    state: IWorkoutsState,
+    mediaAttachments: IMediaAttachment
+  ) {
+    state.workoutData.mediaAttachments.push(mediaAttachments)
+  },
+  [WORKOUTS_STORE.MUTATIONS.UPDATE_WORKOUT_MEDIA_ATTACHMENT](
+    state: IWorkoutsState,
+    mediaAttachment: IMediaAttachment
+  ) {
+    state.workoutData.mediaAttachments = state.workoutData.mediaAttachments.map(
+      (media) => {
+        if (media.id === mediaAttachment.id) {
+          return { ...mediaAttachment }
+        }
+        return media
+      }
+    )
+  },
+  [WORKOUTS_STORE.MUTATIONS.REMOVE_WORKOUT_MEDIA_ATTACHMENT](
+    state: IWorkoutsState,
+    mediaAttachmentId: string
+  ) {
+    state.workoutData.mediaAttachments =
+      state.workoutData.mediaAttachments.filter(
+        (media) => media.id !== mediaAttachmentId
+      )
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_WORKOUT_MEDIA_ATTACHMENTS](
+    state: IWorkoutsState,
+    mediaAttachments: IMediaAttachment[]
+  ) {
+    state.workoutData.mediaAttachments = mediaAttachments
+  },
+  [WORKOUTS_STORE.MUTATIONS.EMPTY_WORKOUT_MEDIA_ATTACHMENTS](
+    state: IWorkoutsState
+  ) {
+    state.workoutData.mediaAttachments = []
+  },
+  [WORKOUTS_STORE.MUTATIONS.SET_DISPLAYED_MEDIA_INDEX](
+    state: IWorkoutsState,
+    index: number | undefined
+  ) {
+    state.workoutData.displayedMediaIndex = index
+  },
+  [WORKOUTS_STORE.MUTATIONS.IS_EDITING_MEDIA](
+    state: IWorkoutsState,
+    isEditingMedia: boolean
+  ) {
+    state.workoutData.isEditingMedia = isEditingMedia
+  },
+}

@@ -1,0 +1,32 @@
+import type { IEquipment } from '@/types/equipments'
+import type { TVisibilityLevels } from '@/types/user.ts'
+
+export type TPaceSpeedDisplay = 'pace' | 'speed' | 'pace_and_speed'
+
+export interface ISport {
+  analysis_visibility: TVisibilityLevels
+  color: string | null
+  default_equipments: IEquipment[]
+  has_workouts: boolean
+  id: number
+  img: string
+  is_active: boolean
+  is_active_for_user: boolean
+  label: string
+  map_visibility: TVisibilityLevels
+  media_visibility: TVisibilityLevels
+  pace_speed_display: TPaceSpeedDisplay
+  stopped_speed_threshold: number
+  workouts_visibility: TVisibilityLevels
+}
+
+export interface ITranslatedSport extends ISport {
+  translatedLabel: string
+}
+
+export interface ISportPayload {
+  id: number
+  isActive: boolean
+}
+
+export type TActiveStatus = 'is_active' | 'is_active_for_user' | 'all'

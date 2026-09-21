@@ -1,0 +1,92 @@
+{
+  "Canoeing": {
+    "LABEL": "Canoë"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "Canoë en eaux vives"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Vélo (Sport)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Vélo (Transport)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Vélo (Trekking)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Vélo (Virtuel)"
+  },
+  "Halfbike": {
+    "LABEL": "Halfbike"
+  },
+  "Hiking": {
+    "LABEL": "Randonnée"
+  },
+  "Ice Skating": {
+    "LABEL": "Patinage sur glace"
+  },
+  "Inline Skating": {
+    "LABEL": "Roller en ligne"
+  },
+  "Kayaking": {
+    "LABEL": "Kayak"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Kayaking en eaux vives"
+  },
+  "Mountain Biking": {
+    "LABEL": "VTT"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "VTT (Électrique)"
+  },
+  "Mountaineering": {
+    "LABEL": "Alpinisme"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Nage en eau libre"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Padel (Extérieur)"
+  },
+  "Paragliding": {
+    "LABEL": "Parapente"
+  },
+  "Rowing": {
+    "LABEL": "Aviron"
+  },
+  "Running": {
+    "LABEL": "Course"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Ski (Alpin)"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Ski (Randonnée)"
+  },
+  "Snowshoes": {
+    "LABEL": "Raquettes"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Stand up paddle"
+  },
+  "Swimrun": {
+    "LABEL": "Swimrun"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Tennis (Extérieur)"
+  },
+  "Trail": {
+    "LABEL": "Trail"
+  },
+  "Triathlon": {
+    "LABEL": "Triathlon"
+  },
+  "Walking": {
+    "LABEL": "Marche"
+  },
+  "Windsurfing": {
+    "LABEL": "Planche à voile"
+  }
+}

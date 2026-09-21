@@ -1,0 +1,1017 @@
+from datetime import timedelta
+from typing import Dict, Tuple, Union
+
+from flask import Blueprint, request
+from sqlalchemy import exc, func
+
+from fittrackee import db
+from fittrackee.oauth2.server import require_auth
+from fittrackee.responses import (
+    DataNotFoundErrorResponse,
+    ForbiddenErrorResponse,
+    HttpResponse,
+    InvalidPayloadErrorResponse,
+    MiscEquipmentInvalidPayloadErrorResponse,
+    handle_error_and_return_response,
+)
+from fittrackee.users.models import (
+    User,
+    UserSportPreferenceEquipment,
+)
+from fittrackee.utils import clean_input, decode_short_id
+from fittrackee.visibility_levels import VisibilityLevel
+from fittrackee.workouts.models import Sport, Workout
+
+from .exceptions import (
+    InvalidEquipmentsException,
+    MiscEquipmentLimitExceededException,
+)
+from .models import (
+    DESCRIPTION_MAX_LENGTH,
+    LABEL_MAX_LENGTH,
+    Equipment,
+    EquipmentType,
+    WorkoutEquipment,
+)
+from .utils import (
+    SPORT_EQUIPMENT_TYPES,
+    handle_default_sports,
+    update_user_sport_equipment_preferences_if_exist,
+)
+
+equipments_blueprint = Blueprint("equipments", __name__)
+
+
+@equipments_blueprint.route("/equipments", methods=["GET"])
+@require_auth(scopes=["equipments:read"], allow_suspended_user=True)
+def get_equipments(auth_user: User) -> Dict:
+    """
+    Get all user equipments.
+    Only the equipment owner can see his equipment.
+
+    Suspended user can access this endpoint.
+
+    **Scope**: ``equipments:read``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/equipments HTTP/1.1
+      Content-Type: application/json
+
+    - with some query parameters (get all equipment of type "Shoes")
+
+    .. sourcecode:: http
+
+      GET /api/equipment?equipment_type_id=1  HTTP/1.1
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "equipments": [
+            {
+              "creation_date": "Tue, 21 Mar 2023 06:08:06 GMT",
+              "default_for_sport_ids": [],
+              "description": "The first shoes added to FitTrackee",
+              "equipment_type": {
+                "id": 1,
+                "is_active": true,
+                "label": "Shoe"
+              },
+              "id": "2UkrViYShoAkg8qSUKnUS4",
+              "is_active": true,
+              "label": "My shoes",
+              "total_distance": 0.0,
+              "total_duration_in_hours": 0,
+              "user_id": 1,
+              "workouts_count": 0
+          },
+          {
+              "creation_date": "Tue, 21 Mar 2023 06:08:29 GMT",
+              "default_for_sport_ids": [],
+              "description": "The second shoes added to FitTrackee",
+              "equipment_type": {
+                "id": 1,
+                "is_active": true,
+                "label": "Shoe"
+              },
+              "id": "2UkrViYShoAkg8qSUKnUS4",
+              "is_active": true,
+              "label": "My shoes 2",
+              "total_distance": 0.0,
+              "total_duration_in_hours": 0,
+              "user_id": ,
+              "workouts_count": 0
+              }
+            ]
+          }
+        },
+        "status": "success"
+      }
+
+    :query integer equipment_type_id: equipment type id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: success
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+
+    """
+    params = request.args.copy()
+    type_id = params.get("equipment_type_id", None)
+
+    filters = [Equipment.user_id == auth_user.id]
+    if type_id:
+        filters.append(Equipment.equipment_type_id == type_id)
+
+    equipments = Equipment.query.filter(*filters).order_by(Equipment.id).all()
+
+    return {
+        "status": "success",
+        "data": {
+            "equipments": [
+                equipment.serialize(current_user=auth_user)
+                for equipment in equipments
+            ]
+        },
+    }
+
+
+@equipments_blueprint.route(
+    "/equipments/<string:equipment_short_id>", methods=["GET"]
+)
+@require_auth(scopes=["equipments:read"], allow_suspended_user=True)
+def get_equipment_by_id(
+    auth_user: User, equipment_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get an equipment item.
+    Only the equipment owner can see his equipment.
+
+    Suspended user can access this endpoint.
+
+    **Scope**: ``equipments:read``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/equipments/2UkrViYShoAkg8qSUKnUS4 HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    - success
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "equipments": [
+            {
+              "creation_date": "Tue, 21 Mar 2023 06:08:06 GMT",
+              "default_for_sport_ids": [],
+              "description": "Another piece of equipment",
+              "equipment_type": {
+                "id": 1,
+                "is_active": true,
+                "label": "Shoe"
+              },
+              "id": "2UkrViYShoAkg8qSUKnUS4",
+              "is_active": true,
+              "label": "Other user Equipment",
+              "total_distance": 0.0,
+              "total_duration_in_hours": 0,
+              "user_id": 2,
+              "workouts_count": 0
+            }
+          ]
+        },
+        "status": "success"
+      }
+
+    - equipment not found
+
+    .. sourcecode:: http
+
+      HTTP/1.1 404 NOT FOUND
+      Content-Type: application/json
+
+      {
+        "data": {
+          "equipments": []
+        },
+        "status": "not found"
+      }
+
+    :param string equipment_short_id: equipment short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: success
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+    :statuscode 404: ``equipment not found``
+
+    """
+    filter_args = {
+        "uuid": decode_short_id(equipment_short_id),
+        "user_id": auth_user.id,
+    }
+    equipment = Equipment.query.filter_by(**filter_args).first()
+    if equipment:
+        return {
+            "status": "success",
+            "data": {
+                "equipments": [equipment.serialize(current_user=auth_user)]
+            },
+        }
+    return DataNotFoundErrorResponse("equipments")
+
+
+@equipments_blueprint.route("/equipments", methods=["POST"])
+@require_auth(scopes=["equipments:write"])
+def post_equipment(auth_user: User) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Post a new piece of equipment.
+
+    **Scope**: ``equipments:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/equipments HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    - success
+
+    .. sourcecode:: http
+
+      HTTP/1.1 201 CREATED
+      Content-Type: application/json
+
+      {
+        "data": {
+          "equipments": [
+            {
+              "creation_date": "Tue, 21 Mar 2023 06:08:29 GMT",
+              "default_for_sport_ids": [],
+              "description": null,
+              "equipment_type": {
+                "id": 1,
+                "is_active": true,
+                "label": "Shoe"
+              },
+              "id": "2UkrViYShoAkg8qSUKnUS4",
+              "is_active": true,
+              "label": "New equipment from API",
+              "total_distance": 0.0,
+              "total_duration_in_hours": 0,
+              "user_id": 1,
+              "workouts_count": 0
+            }
+          ]
+        },
+        "status": "created"
+      }
+
+    - 'misc' equipment exceeding the max limit, when other equipment items
+      are already associated with sports
+
+    .. sourcecode:: http
+
+      HTTP/1.1 400 BAD REQUEST
+      Content-Type: application/json
+
+      {
+        "message": "a maximum of 5 pieces of Misc equipment can be added",
+        "sport_ids": [1],
+        "status": "limit_exceeded"
+      }
+
+
+    :<json string label: a brief (less than 50 characters) label for
+        the piece of equipment
+    :<json integer equipment_type: the ID for an equipment type (it must be
+        active)
+    :<json string description: a (perhaps longer) description of the
+        equipment (limited to 2000 characters, optional)
+    :<json boolean is_active: whether or not this equipment is currently
+        active (default: ``true``)
+    :<json array of integers default_for_sport_ids: the default sport ids
+        to use for this equipment, not mandatory.
+        **Note**: If sport has already a default equipment, it replaces it,
+        with the exception of the "Misc" type, in which case it is added.
+        If the sport already has 5 pieces of "Misc" equipment, an error is
+        returned.
+    :<json string visibility: visibility level (``public``, ``followers_only``,
+        ``private``), not mandatory (default value: ``private``)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 201: equipment created
+    :statuscode 400:
+        - ``the 'label' and 'equipment_type_id' parameters must be provided``
+        - ``equipment already exists with the same label``
+        - ``label exceeds 50 characters``
+        - ``description exceeds 2000 characters``
+        - ``invalid equipment type id``
+        - ``equipment type is inactive``
+        - ``sport (id <sport_id>) does not exist``
+        - ``invalid sport '<sport_label>' for equipment
+          type '<equipment_type_label>'``
+        - ``a maximum of 5 pieces of Misc equipment can be added``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``equipment not found``
+    :statuscode 500: ``Error during equipment save``
+    """
+    equipment_data = request.get_json()
+    if (
+        not equipment_data
+        or not equipment_data.get("label")
+        or equipment_data.get("equipment_type_id") is None
+    ):
+        return InvalidPayloadErrorResponse(
+            "the 'label' and 'equipment_type_id' parameters must be provided"
+        )
+
+    label = equipment_data["label"]
+    if len(label) > LABEL_MAX_LENGTH:
+        return InvalidPayloadErrorResponse(
+            f"label exceeds {LABEL_MAX_LENGTH} characters"
+        )
+
+    description = equipment_data.get("description")
+    if description and len(description) > DESCRIPTION_MAX_LENGTH:
+        return InvalidPayloadErrorResponse(
+            f"description exceeds {DESCRIPTION_MAX_LENGTH} characters"
+        )
+
+    equipment_type_id = equipment_data["equipment_type_id"]
+
+    if (
+        Equipment.query.filter_by(user_id=auth_user.id, label=label).first()
+        is not None
+    ):
+        return InvalidPayloadErrorResponse(
+            "equipment already exists with the same label"
+        )
+
+    equipment_type = EquipmentType.query.filter_by(
+        id=equipment_type_id
+    ).first()
+    if not equipment_type:
+        return InvalidPayloadErrorResponse("invalid equipment type id")
+    if not equipment_type.is_active:
+        return InvalidPayloadErrorResponse("equipment type is inactive")
+
+    default_for_sport_ids = equipment_data.get("default_for_sport_ids", [])
+    try:
+        user_sport_preferences = handle_default_sports(
+            default_for_sport_ids, auth_user, equipment_type
+        )
+    except InvalidEquipmentsException as e:
+        return InvalidPayloadErrorResponse(str(e))
+
+    visibility = equipment_data.get("visibility")
+    if visibility is not None:
+        try:
+            VisibilityLevel(visibility)
+        except ValueError:
+            return InvalidPayloadErrorResponse("invalid visibility")
+
+    try:
+        new_equipment = Equipment(
+            user_id=auth_user.id,
+            label=clean_input(label),
+            equipment_type_id=equipment_type_id,
+            is_active=True,
+            description=clean_input(description) if description else "",
+        )
+        db.session.add(new_equipment)
+        db.session.flush()
+
+        if visibility:
+            new_equipment.visibility = visibility
+
+        update_user_sport_equipment_preferences_if_exist(
+            new_equipment,
+            user_sport_preferences,
+            auth_user,
+            default_for_sport_ids,
+        )
+        db.session.commit()
+
+        return (
+            {
+                "status": "created",
+                "data": {
+                    "equipments": [
+                        new_equipment.serialize(current_user=auth_user)
+                    ]
+                },
+            },
+            201,
+        )
+    except MiscEquipmentLimitExceededException as e:
+        return MiscEquipmentInvalidPayloadErrorResponse(
+            message=e.message, sport_ids=e.sport_ids
+        )
+    except (exc.IntegrityError, ValueError) as e:
+        return handle_error_and_return_response(
+            error=e,
+            message="Error during equipment save",
+            status="fail",
+            db=db,
+        )
+
+
+@equipments_blueprint.route(
+    "/equipments/<string:equipment_short_id>", methods=["PATCH"]
+)
+@require_auth(scopes=["equipments:write"])
+def update_equipment(
+    auth_user: User, equipment_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Update a piece of equipment. Allows a user to change one of their
+    equipment's label, description, type or active status.
+
+    Changing equipment type will remove all existing workouts associations
+    for that piece of equipment and default sports.
+
+    **Scope**: ``equipments:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      PATCH /api/equipments/QRj7BY6H2iYjSV8sersFgV HTTP/1.1
+      Content-Type: application/json
+
+    **Example responses**:
+
+    - success
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "equipments": [
+              {
+                "creation_date": "Tue, 21 Mar 2023 06:28:10 GMT",
+                "default_for_sport_ids": [],
+                "description": "Change bike to shoes",
+                "equipment_type": {
+                  "id": 1,
+                  "is_active": true,
+                  "label": "Shoe"
+                },
+                "id": "QRj7BY6H2iYjSV8sersFgV",
+                "is_active": true,
+                "label": "Updated bike",
+                "total_distance": 0.0,
+                "total_duration_in_hours": 0,
+                "user_id": 1,
+                "workouts_count": 0
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    - equipment not found
+
+    .. sourcecode:: http
+
+      HTTP/1.1 404 NOT FOUND
+      Content-Type: application/json
+
+      {
+        "data": {
+          "equipments": []
+        },
+        "status": "not found"
+      }
+
+    - 'misc' equipment exceeding the max limit, when other equipment items
+      are already associated with sports
+
+    .. sourcecode:: http
+
+      HTTP/1.1 400 BAD REQUEST
+      Content-Type: application/json
+
+      {
+        "message": "a maximum of 5 pieces of Misc equipment can be added",
+        "sport_ids": [1],
+        "status": "limit_exceeded"
+      }
+
+
+    :param string equipment_short_id: equipment short id
+
+    :<json string label: a brief (less than 50 characters) label for
+        the piece of equipment
+    :<json int equipment_type_id: the ID for an equipment type (it must be
+        active)
+    :<json string description: a (perhaps longer) description of the
+        equipment (limited to 200 characters, optional)
+    :<json boolean is_active: whether or not this equipment is currently
+        active (default: ``true``)
+    :<json array of integers default_for_sport_ids: the default sport ids
+        to use for this equipment.
+        **Note**: If sport has already a default equipment, it replaces it,
+        with the exception of the "Misc" type, in which case it is added.
+        If the sport already has 5 pieces of "Misc" equipment, an error is
+        returned.
+    :<json string visibility: visibility level (``public``, ``followers_only``,
+        ``private``)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: equipment updated
+    :statuscode 400:
+        - ``no request data was supplied``
+        - ``no valid parameters supplied``
+        - ``equipment already exists with the same label``
+        - ``label exceeds 50 characters``
+        - ``description exceeds 2000 characters``
+        - ``invalid equipment type id``
+        - ``equipment type is inactive``
+        - ``sport (id <sport_id>) does not exist``
+        - ``invalid sport '<sport_label>' for equipment
+          type '<equipment_type_label>'``
+        - ``a maximum of 5 pieces of Misc equipment can be added``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``equipment not found``
+    :statuscode 500: ``Error during equipment update``
+
+    """
+    equipment_data = request.get_json()
+    if not equipment_data:
+        return InvalidPayloadErrorResponse("no request data was supplied")
+
+    if not any(
+        e
+        in [
+            "label",
+            "description",
+            "equipment_type_id",
+            "is_active",
+            "default_for_sport_ids",
+            "visibility",
+        ]
+        for e in equipment_data
+    ):
+        return InvalidPayloadErrorResponse("no valid parameters supplied")
+
+    new_default_for_sport_ids = equipment_data.get(
+        "default_for_sport_ids", None
+    )
+    skip_default_sports_update = set()
+
+    try:
+        equipment = Equipment.query.filter_by(
+            uuid=decode_short_id(equipment_short_id), user_id=auth_user.id
+        ).first()
+        if not equipment:
+            return DataNotFoundErrorResponse("equipments")
+
+        old_equipment_type = equipment.equipment_type
+        old_default_sport_ids = [
+            sport_preference.sport_id
+            for sport_preference in equipment.default_for_sports
+        ]
+
+        # set new values if they were in the request
+        if "is_active" in equipment_data:
+            equipment.is_active = equipment_data.get("is_active")
+        if "label" in equipment_data:
+            label = equipment_data.get("label")
+            if len(label) > LABEL_MAX_LENGTH:
+                return InvalidPayloadErrorResponse(
+                    f"label exceeds {LABEL_MAX_LENGTH} characters"
+                )
+            if (
+                Equipment.query.filter(
+                    Equipment.user_id == auth_user.id,
+                    Equipment.label == label,
+                    Equipment.id != equipment.id,
+                ).first()
+                is not None
+            ):
+                return InvalidPayloadErrorResponse(
+                    "equipment already exists with the same label"
+                )
+            equipment.label = label
+        if "description" in equipment_data:
+            description = equipment_data.get("description")
+            if len(description) > DESCRIPTION_MAX_LENGTH:
+                return InvalidPayloadErrorResponse(
+                    f"description exceeds {DESCRIPTION_MAX_LENGTH} characters"
+                )
+            equipment.description = clean_input(description)
+        if "visibility" in equipment_data:
+            visibility = equipment_data["visibility"]
+            try:
+                VisibilityLevel(visibility)
+            except ValueError:
+                return InvalidPayloadErrorResponse("invalid visibility")
+            equipment.visibility = visibility
+
+        if "equipment_type_id" in equipment_data:
+            new_equipment_type_id = equipment_data.get("equipment_type_id")
+            new_equipment_type = EquipmentType.query.filter_by(
+                id=new_equipment_type_id
+            ).first()
+
+            if not new_equipment_type:
+                return InvalidPayloadErrorResponse("invalid equipment type id")
+
+            if new_equipment_type.id != old_equipment_type.id:
+                # remove all default sports for equipment
+                # (new new_equipment_type will be created later if needed)
+                db.session.query(UserSportPreferenceEquipment).filter(
+                    UserSportPreferenceEquipment.c.user_id == auth_user.id,
+                    UserSportPreferenceEquipment.c.equipment_id
+                    == equipment.id,
+                ).delete()
+
+                if new_equipment_type.label == "Misc":
+                    # in order to check if max limit is exceeding
+                    new_default_for_sport_ids = (
+                        [
+                            sport_preference.sport_id
+                            for sport_preference in equipment.default_for_sports  # noqa: E501
+                        ]
+                        if new_default_for_sport_ids is None
+                        else new_default_for_sport_ids
+                    )
+
+                else:
+                    if not new_equipment_type.is_active:
+                        return InvalidPayloadErrorResponse(
+                            "equipment type is inactive"
+                        )
+
+                    # remove workouts association on type change
+                    db.session.query(WorkoutEquipment).filter(
+                        WorkoutEquipment.c.equipment_id == equipment.id
+                    ).delete()
+                    equipment.total_distance = 0.0
+                    equipment.total_duration = timedelta()
+                    equipment.total_moving = timedelta()
+                    equipment.total_workouts = 0
+
+                    # with changes on equipment but no changes on default
+                    # sports, store the default sport id in order to recreated
+                    # only the valid ones
+                    if new_default_for_sport_ids is None or (
+                        new_default_for_sport_ids == old_default_sport_ids
+                    ):
+                        valid_sport_ids = [
+                            sport.id
+                            for sport in Sport.query.filter(
+                                Sport.label.in_(
+                                    SPORT_EQUIPMENT_TYPES[
+                                        new_equipment_type.label
+                                    ]
+                                )
+                            ).all()
+                        ]
+                        # keep only the valid default sport ids
+                        new_default_for_sport_ids = [
+                            sport_id
+                            for sport_id in old_default_sport_ids
+                            if sport_id in valid_sport_ids
+                        ]
+
+                    # For non-misc equipment items, default sports are
+                    # recreated only if there is not already a default item
+                    # associated with them
+                    if not equipment_data.get("default_for_sport_ids", None):
+                        skip_default_sports_update = {
+                            uspe[1]
+                            for uspe in db.session.query(
+                                UserSportPreferenceEquipment
+                            )
+                            .filter(
+                                UserSportPreferenceEquipment.c.user_id
+                                == auth_user.id,
+                                UserSportPreferenceEquipment.c.equipment_id
+                                != equipment.id,
+                                UserSportPreferenceEquipment.c.equipment_type_id
+                                == new_equipment_type_id,
+                            )
+                            .all()
+                        }
+
+            equipment.equipment_type_id = new_equipment_type_id
+            equipment.equipment_type = new_equipment_type
+
+        if new_default_for_sport_ids is not None:
+            try:
+                user_sport_preferences = handle_default_sports(
+                    new_default_for_sport_ids,
+                    auth_user,
+                    equipment.equipment_type,
+                )
+            except InvalidEquipmentsException as e:
+                return InvalidPayloadErrorResponse(str(e))
+
+            # get existing default sports for equipment item
+            existing_sport_equipment_preferences = (
+                db.session.query(UserSportPreferenceEquipment)
+                .filter(
+                    UserSportPreferenceEquipment.c.user_id == auth_user.id,
+                    UserSportPreferenceEquipment.c.equipment_id
+                    == equipment.id,
+                )
+                .all()
+            )
+
+            # remove invalid default sports for item type
+            db.session.query(UserSportPreferenceEquipment).filter(
+                UserSportPreferenceEquipment.c.user_id == auth_user.id,
+                (UserSportPreferenceEquipment.c.equipment_id == equipment.id),
+                UserSportPreferenceEquipment.c.sport_id.in_(
+                    {s[1] for s in existing_sport_equipment_preferences}
+                    - set(new_default_for_sport_ids)
+                ),
+            ).delete()
+
+            update_user_sport_equipment_preferences_if_exist(
+                equipment,
+                user_sport_preferences,
+                auth_user,
+                new_default_for_sport_ids,
+                skip_default_sports_update,
+            )
+        db.session.commit()
+
+        return {
+            "status": "success",
+            "data": {
+                "equipments": [equipment.serialize(current_user=auth_user)]
+            },
+        }
+    except MiscEquipmentLimitExceededException as e:
+        return MiscEquipmentInvalidPayloadErrorResponse(
+            message=e.message, sport_ids=e.sport_ids
+        )
+    except (exc.IntegrityError, exc.OperationalError, ValueError) as e:
+        return handle_error_and_return_response(
+            error=e,
+            db=db,
+            message="Error during equipment update",
+            status="fail",
+        )
+
+
+@equipments_blueprint.route(
+    "/equipments/<string:equipment_short_id>/refresh", methods=["POST"]
+)
+@require_auth(scopes=["equipments:write"])
+def refresh_equipment(
+    auth_user: User, equipment_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Refresh equipment totals (in case values are incorrect).
+
+    **Scope**: ``equipments:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/equipments/QRj7BY6H2iYjSV8sersFgV/refresh HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "equipments": [
+              {
+                "creation_date": "Tue, 21 Mar 2023 06:28:10 GMT",
+                "default_for_sport_ids": [],
+                "description": "My Shoes",
+                "equipment_type": {
+                  "id": 1,
+                  "is_active": true,
+                  "label": "Shoe"
+                },
+                "id": "QRj7BY6H2iYjSV8sersFgV",
+                "is_active": true,
+                "label": "Updated bike",
+                "total_distance": 6.0,
+                "total_duration_in_hours": 1,
+                "user_id": 1,
+                "workouts_count": 1
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: equipment updated
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``equipment not found``
+    :statuscode 500: ``Error during equipment save``
+    """
+    equipment = Equipment.query.filter_by(
+        uuid=decode_short_id(equipment_short_id), user_id=auth_user.id
+    ).first()
+    if not equipment:
+        return DataNotFoundErrorResponse("equipments")
+
+    try:
+        totals = (
+            db.session.query(
+                func.sum(Workout.distance).label("total_distance"),
+                func.sum(Workout.duration).label("total_duration"),
+                func.sum(Workout.moving).label("total_moving"),
+                func.count(Workout.id).label("total_workouts"),
+            )
+            .join(WorkoutEquipment)
+            .filter(WorkoutEquipment.c.equipment_id == equipment.id)
+            .one()
+            ._asdict()
+        )
+        equipment.total_distance = (
+            0.0
+            if totals["total_distance"] is None
+            else totals["total_distance"]
+        )
+        equipment.total_duration = (
+            timedelta()
+            if totals["total_duration"] is None
+            else totals["total_duration"]
+        )
+        equipment.total_moving = (
+            timedelta()
+            if totals["total_moving"] is None
+            else totals["total_moving"]
+        )
+        equipment.total_workouts = totals["total_workouts"]
+
+        db.session.commit()
+
+        return {
+            "status": "success",
+            "data": {
+                "equipments": [equipment.serialize(current_user=auth_user)]
+            },
+        }
+
+    except (exc.IntegrityError, exc.OperationalError, ValueError) as e:
+        return handle_error_and_return_response(
+            error=e,
+            db=db,
+            message="Error during equipment update",
+            status="fail",
+        )
+
+
+@equipments_blueprint.route(
+    "/equipments/<string:equipment_short_id>", methods=["DELETE"]
+)
+@require_auth(scopes=["equipments:write"])
+def delete_equipment(
+    auth_user: User, equipment_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Delete a piece of equipment.
+
+    A user can only delete their own equipment, and
+    only if there are no workouts associated with that equipment (unless
+    forced). If equipment was associated with any workouts and deletion is
+    forced, the association between this equipment and those workouts will
+    be removed. If this equipment was a default for any sport, that default
+    will be removed (set to NULL).
+
+    **Scope**: ``equipments:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      DELETE /api/equipments/QRj7BY6H2iYjSV8sersFgV HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 204 NO CONTENT
+      Content-Type: application/json
+
+    :param string equipment_short_id: equipment short id
+
+    :query force: if supplied as argument (no value required), will force
+                  deletion of the equipment and remove that equipment
+                  from associated workouts
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 204: equipment deleted
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+        - ``you cannot delete equipment that has workouts associated with it
+          without 'force' parameter``
+    :statuscode 404: ``equipment not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    force_delete = "force" in request.args
+    equipment_uuid = decode_short_id(equipment_short_id)
+
+    try:
+        equipment = Equipment.query.filter_by(
+            uuid=equipment_uuid, user_id=auth_user.id
+        ).first()
+        if not equipment:
+            return DataNotFoundErrorResponse("equipments")
+        if equipment.total_workouts > 0 and not force_delete:
+            return ForbiddenErrorResponse(
+                f"Cannot delete equipment that has associated workouts. "
+                f"Equipment id {equipment.short_id} has "
+                f"{equipment.total_workouts} associated "
+                f"workout{'' if equipment.total_workouts == 1 else 's'}. "
+                f"(Provide argument 'force' as a query parameter to "
+                f"override this check)"
+            )
+        # other condition for deleting attachment to workouts
+        # is handled by database cascading
+
+        # NULLing of user sport preferences handled by database cascading
+
+        # delete equipment row
+        db.session.query(Equipment).filter(
+            Equipment.id == equipment.id
+        ).delete()
+        db.session.commit()
+        return {"status": "no content"}, 204
+    except (
+        exc.IntegrityError,
+        exc.OperationalError,
+        ValueError,
+        OSError,
+    ) as e:  # pragma: no cover
+        return handle_error_and_return_response(e, db=db)

@@ -1,0 +1,104 @@
+import os
+import zipfile
+from typing import TYPE_CHECKING
+
+import gpxpy
+import pytest
+
+from fittrackee.constants import ElevationProcessing
+from fittrackee.tests.workouts.mixins import WorkoutFileMixin
+from fittrackee.workouts.exceptions import WorkoutFileException
+from fittrackee.workouts.services import WorkoutKmzService
+
+if TYPE_CHECKING:
+    from flask import Flask
+
+    from fittrackee.users.models import User
+    from fittrackee.workouts.models import Sport
+
+
+class TestWorkoutKmzServiceParseFile(WorkoutFileMixin):
+    @staticmethod
+    def assert_gpx(gpx: "gpxpy.gpx.GPX") -> None:
+        assert len(gpx.tracks) == 1
+        assert len(gpx.tracks[0].segments) == 2
+        moving_data = gpx.get_moving_data()
+        assert moving_data.moving_time == 235.0
+        assert round(moving_data.moving_distance, 1) == 299.5
+
+    def test_it_raises_error_when_file_is_not_kmz(
+        self, app: "Flask", invalid_kml_file: str, sport_1_cycling: "Sport"
+    ) -> None:
+        with (
+            pytest.raises(
+                WorkoutFileException, match="error when parsing kmz file"
+            ),
+        ):
+            WorkoutKmzService.parse_file(
+                self.get_kmz_file_content(app, file_name="gpx_test.zip"),
+                segments_creation_event="none",
+                sport=sport_1_cycling,
+            )
+
+    def test_it_returns_gpx_with_kml_content_from_file_path(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        gpx, file_stats, sessions_stats = WorkoutKmzService.parse_file(
+            self.get_kmz_file_content(app, file_name="example.kmz"),
+            segments_creation_event="none",
+            sport=sport_1_cycling,
+        )
+
+        self.assert_gpx(gpx)
+        assert file_stats == {}
+        assert sessions_stats == []
+
+    def test_it_returns_gpx_when_content_is_already_unzipped(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        file_path = os.path.join(app.root_path, "tests/files", "example.kmz")
+        with zipfile.ZipFile(file_path, "r") as kmz_ref:
+            kml_content = kmz_ref.open("doc.kml")
+            gpx, _, _ = WorkoutKmzService.parse_file(
+                kml_content,
+                segments_creation_event="none",
+                sport=sport_1_cycling,
+            )
+
+        self.assert_gpx(gpx)
+
+
+class TestWorkoutKmzServiceInstantiation(WorkoutFileMixin):
+    def test_it_instantiates_service(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        service = WorkoutKmzService(
+            user_1,
+            self.get_kmz_file_content(app, file_name="example.kmz"),
+            sport_1_cycling,
+            sport_1_cycling.stopped_speed_threshold,
+        )
+
+        # from BaseWorkoutWithSegmentsCreationService
+        assert service.auth_user == user_1
+        assert service.sport == sport_1_cycling
+        assert service.coordinates == []
+        assert (
+            service.stopped_speed_threshold
+            == sport_1_cycling.stopped_speed_threshold
+        )
+        assert service.workout_name is None
+        assert service.workout_description is None
+        assert service.start_point is None
+        assert service.end_point is None
+        assert service.workout is None
+        assert service.is_creation is True
+        assert service.get_weather is True
+        assert service.get_elevation_on_refresh is False
+        assert service.updated_elevation_data_source is None
+        assert service.elevation_processing is ElevationProcessing.NONE
+        assert service.update_existing_elevation is False
+        # from WorkoutGpxService
+        assert isinstance(service.gpx, gpxpy.gpx.GPX)
+        # used only in case of .fit file
+        assert service.all_data_from_file is False

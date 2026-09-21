@@ -1,0 +1,154 @@
+from typing import TYPE_CHECKING
+from unittest.mock import patch
+
+import pytest
+
+from fittrackee.workouts.exceptions import WorkoutGPXException
+from fittrackee.workouts.utils.chart import get_chart_data
+
+if TYPE_CHECKING:
+    from flask import Flask
+
+    from fittrackee.users.models import User
+    from fittrackee.workouts.models import Sport, Workout, WorkoutSegment
+
+
+class TestGetChartData:
+    def test_it_raises_error_when_no_segments(
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_1_cycling: "Sport",
+        workout_cycling_user_1: "Workout",
+    ) -> None:
+        with pytest.raises(WorkoutGPXException, match="No segments"):
+            get_chart_data(
+                workout_cycling_user_1,
+                user=user_1,
+                can_see_heart_rate=True,
+                can_see_map_data=True,
+            )
+
+    def test_it_raises_error_when_segment_not_found(
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_1_cycling: "Sport",
+        workout_cycling_user_1: "Workout",
+    ) -> None:
+        with pytest.raises(
+            WorkoutGPXException,
+            match="No segment with id 'C4asMMbRJsxTirSjTVWeWU'",
+        ):
+            get_chart_data(
+                workout_cycling_user_1,
+                user=user_1,
+                can_see_heart_rate=True,
+                can_see_map_data=True,
+                segment_short_id="C4asMMbRJsxTirSjTVWeWU",
+            )
+
+    def test_it_returns_empty_list_when_no_points_and_not_gpx(
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_1_cycling: "Sport",
+        workout_cycling_user_1: "Workout",
+        workout_cycling_user_1_segment: "WorkoutSegment",
+    ) -> None:
+        workout_cycling_user_1.original_file = None
+
+        chart_data = get_chart_data(
+            workout_cycling_user_1,
+            user=user_1,
+            can_see_heart_rate=True,
+            can_see_map_data=True,
+        )
+
+        assert chart_data == []
+
+    def test_it_calls_get_chart_data_from_segment_points_when_segments_have_points(  # noqa
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        workout_cycling_user_1_with_coordinates: "Workout",
+        workout_cycling_user_1_segment_0_with_coordinates: "WorkoutSegment",
+        workout_cycling_user_1_segment_1_with_coordinates: "WorkoutSegment",
+    ) -> None:
+        with patch(
+            "fittrackee.workouts.utils.chart.get_chart_data_from_segment_points"
+        ) as get_chart_data_from_segment_points_mock:
+            get_chart_data(
+                workout_cycling_user_1_with_coordinates,
+                user=user_1,
+                can_see_map_data=True,
+                can_see_heart_rate=True,
+            )
+
+        get_chart_data_from_segment_points_mock.assert_called_once_with(
+            [
+                workout_cycling_user_1_segment_0_with_coordinates.points,
+                workout_cycling_user_1_segment_1_with_coordinates.points,
+            ],
+            workout_cycling_user_1_with_coordinates.sport,
+            user=user_1,
+            workout_ave_cadence=None,
+            can_see_heart_rate=True,
+            can_see_map_data=True,
+        )
+
+    def test_it_calls_get_chart_data_from_segment_points_with_segment_id(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        workout_cycling_user_1_with_coordinates: "Workout",
+        workout_cycling_user_1_segment_0_with_coordinates: "WorkoutSegment",
+    ) -> None:
+        with patch(
+            "fittrackee.workouts.utils.chart.get_chart_data_from_segment_points"
+        ) as get_chart_data_from_segment_points_mock:
+            get_chart_data(
+                workout_cycling_user_1_with_coordinates,
+                user=user_1,
+                can_see_map_data=True,
+                can_see_heart_rate=True,
+                segment_short_id=workout_cycling_user_1_segment_0_with_coordinates.short_id,
+            )
+
+        get_chart_data_from_segment_points_mock.assert_called_once_with(
+            [workout_cycling_user_1_segment_0_with_coordinates.points],
+            workout_cycling_user_1_with_coordinates.sport,
+            user=user_1,
+            workout_ave_cadence=None,
+            can_see_heart_rate=True,
+            can_see_map_data=True,
+        )
+
+    def test_it_calls_get_chart_data_from_segment_points_for_multiactivities_sport(  # noqa
+        self,
+        app: "Flask",
+        user_1: "User",
+        workout_triathlon_user_1_with_coordinates: "Workout",
+        workout_triathlon_user_1_segment_0_with_coordinates: "WorkoutSegment",
+    ) -> None:
+        with patch(
+            "fittrackee.workouts.utils.chart.get_chart_data_from_segment_points"
+        ) as get_chart_data_from_segment_points_mock:
+            get_chart_data(
+                workout_triathlon_user_1_with_coordinates,
+                user=user_1,
+                can_see_map_data=True,
+                can_see_heart_rate=True,
+                segment_short_id=workout_triathlon_user_1_segment_0_with_coordinates.short_id,
+            )
+
+        get_chart_data_from_segment_points_mock.assert_called_once_with(
+            [workout_triathlon_user_1_segment_0_with_coordinates.points],
+            workout_triathlon_user_1_segment_0_with_coordinates.sport,
+            user=user_1,
+            workout_ave_cadence=None,
+            can_see_heart_rate=True,
+            can_see_map_data=True,
+        )

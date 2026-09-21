@@ -1,0 +1,83 @@
+{
+  "Canoeing": {
+    "LABEL": "Kanoa"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "Kanoa (ur-zuriak)"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Txirrindularitza (Kirola)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Txirrindularitza (Garraioa)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Txirrindularitza (mendikoa)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Txirrindularitza (birtuala)"
+  },
+  "Halfbike": {
+    "LABEL": "Halfbike"
+  },
+  "Hiking": {
+    "LABEL": "Mendi ibilaldia"
+  },
+  "Kayaking": {
+    "LABEL": "Kayak"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Kayak (ur-zuriak)"
+  },
+  "Mountain Biking": {
+    "LABEL": "Mendiko bizikleta"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "Mendiko bizikleta (elektrikoa)"
+  },
+  "Mountaineering": {
+    "LABEL": "Mendizaletasuna"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Ur irekietako igeriketa"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Padela (kanpokoa)"
+  },
+  "Paragliding": {
+    "LABEL": "Parapentea"
+  },
+  "Rowing": {
+    "LABEL": "Arrauna"
+  },
+  "Running": {
+    "LABEL": "Korrika egitea"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Eskia (alpinoa)"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Mendiko eskia"
+  },
+  "Snowshoes": {
+    "LABEL": "Erraketak"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Paddle Surf"
+  },
+  "Swimrun": {
+    "LABEL": "Igerikorrika"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Tenisa (kanpokoa)"
+  },
+  "Trail": {
+    "LABEL": "Mendiko lasterketa"
+  },
+  "Walking": {
+    "LABEL": "Oinez ibiltzea"
+  },
+  "Windsurfing": {
+    "LABEL": "Windsurf"
+  }
+}

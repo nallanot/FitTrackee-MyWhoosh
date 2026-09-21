@@ -1,0 +1,7 @@
+{{ _('Hi %(username)s,', username=username) }}
+
+{% block content %}{% endblock %}
+
+{% if not without_user_action %}{{ _('Thanks,') }}
+{% endif %}{{ _('The FitTrackee Team') }}
+{{fittrackee_url}}

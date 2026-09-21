@@ -1,0 +1,42 @@
+{
+  "ABOUT": "sobre",
+  "ACTION": "Ação",
+  "ACTIVE": "ativo",
+  "CONFIRMATION": "Confirmação",
+  "CONTACT": "contato",
+  "DAY": "dia | dias",
+  "DESCRIPTION": "Descrição",
+  "DISPLAYED": "Mostrando",
+  "DOCUMENTATION": "documentação",
+  "HERE": "aqui",
+  "HIDDEN": "Escondido",
+  "HOME": "Inicio",
+  "HOURS": "hora | horas",
+  "INACTIVE": "inativo",
+  "LABEL": "etiqueta",
+  "LAST_UPDATE": "Última atualização",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Você pode usar o Markdown.",
+  "MINUTES": "minuto | minutos",
+  "NEXT": "seguinte",
+  "NO": "Não",
+  "NO_DESCRIPTION": "Sem descrição",
+  "NO_NOTES": "Sem notas",
+  "PREVIOUS": "retroceder",
+  "SECONDS": "segundo | segundos",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "subida",
+      "DESC": "descida",
+      "LABEL": "ordenar"
+    },
+    "ORDER_BY": {
+      "LABEL": "organizar por"
+    },
+    "PER_PAGE": {
+      "LABEL": "por página"
+    }
+  },
+  "TOTAL": "total",
+  "TOTAL_DURATION_WITH_PAUSES": "duração total com pausas",
+  "YES": "Sim"
+}

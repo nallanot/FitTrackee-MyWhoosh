@@ -1,0 +1,38 @@
+{
+  "TITLE": "Connexions",
+  "MYWHOOSH": {
+    "AUTO_SYNC": "Synchroniser automatiquement",
+    "CONNECT": "Connecter MyWhoosh",
+    "CONNECTED": "Connecté",
+    "CONNECT_SUCCESS": "Compte MyWhoosh connecté.",
+    "DESCRIPTION": "Importez vos sorties MyWhoosh directement dans FitTrackee.",
+    "DISCONNECT": "Déconnecter",
+    "DISCONNECT_CONFIRM": "Déconnecter MyWhoosh de FitTrackee ?",
+    "DISCONNECT_SUCCESS": "Compte MyWhoosh déconnecté.",
+    "DISCONNECTED": "Non connecté",
+    "IMPORT_STATUS": {
+      "failed": "échec",
+      "imported": "importée",
+      "pending": "en attente"
+    },
+    "LAST_SYNC": "Dernière synchronisation",
+    "GENERIC_ERROR": "Une erreur est survenue.",
+    "PASSWORD_NOTE": "Votre mot de passe MyWhoosh sert uniquement à la connexion et n’est jamais conservé.",
+    "RECENT_IMPORTS": "Importations récentes",
+    "SAVE_SETTINGS": "Enregistrer les paramètres",
+    "SETTINGS_SUCCESS": "Paramètres enregistrés.",
+    "STATUS": "État",
+    "STATUS_VALUES": {
+      "disconnected": "déconnecté",
+      "error": "erreur",
+      "in_progress": "synchronisation en cours",
+      "needs_reconnect": "reconnexion requise",
+      "never": "jamais synchronisé",
+      "partial": "terminé avec des erreurs",
+      "success": "réussi"
+    },
+    "SYNC_DAYS": "Importer les activités des derniers jours",
+    "SYNC_NOW": "Synchroniser maintenant",
+    "SYNC_SUCCESS": "Importées : {imported}; déjà présentes : {skipped}."
+  }
+}

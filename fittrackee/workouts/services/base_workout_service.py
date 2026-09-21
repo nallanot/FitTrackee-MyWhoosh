@@ -1,0 +1,108 @@
+from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
+
+import pytz
+
+from fittrackee.equipments.utils import handle_pieces_of_equipment
+from fittrackee.users.models import UserSportPreference
+from fittrackee.workouts.models import Sport
+
+from ..exceptions import WorkoutException
+from ..models import TITLE_MAX_CHARACTERS
+from .mixins import WorkoutMediaAttachmentsMixin
+
+if TYPE_CHECKING:
+    from fittrackee.equipments.models import Equipment
+    from fittrackee.users.models import User
+    from fittrackee.visibility_levels import VisibilityLevel
+    from fittrackee.workouts.models import Workout
+
+    from .workout_creation_service import WorkoutData
+    from .workouts_from_file_creation_service import WorkoutsData
+
+
+class BaseWorkoutService(ABC, WorkoutMediaAttachmentsMixin):
+    def __init__(
+        self,
+        auth_user: "User",
+        sport_id: Optional[int],
+        equipment_ids: Union[List[str], None],
+    ):
+        if not sport_id:
+            raise WorkoutException("invalid", "no sport id provided")
+        try:
+            self.sport = Sport.query.filter_by(id=sport_id).one()
+        except Exception as e:
+            raise WorkoutException(
+                "invalid",
+                f"Sport id: {sport_id} does not exist",
+            ) from e
+        self.auth_user = auth_user
+        self.sport_preferences = UserSportPreference.query.filter_by(
+            user_id=self.auth_user.id, sport_id=self.sport.id
+        ).first()
+        self.stopped_speed_threshold = (
+            self.sport.stopped_speed_threshold
+            if self.sport_preferences is None
+            else self.sport_preferences.stopped_speed_threshold
+        )
+        self.equipment_ids = equipment_ids
+
+    def get_equipments(self) -> Union[List["Equipment"], None]:
+        if self.equipment_ids is None and self.sport_preferences:
+            return [
+                equipment
+                for equipment in self.sport_preferences.default_equipments.all()  # noqa
+                if equipment.is_active is True
+            ]
+        return handle_pieces_of_equipment(
+            self.equipment_ids,
+            self.auth_user,
+            self.sport.id,
+        )
+
+    def _get_title(self, workout_date: datetime, title: Optional[str]) -> str:
+        if title:
+            return title[:TITLE_MAX_CHARACTERS]
+
+        workout_datetime = (
+            workout_date.astimezone(pytz.timezone(self.auth_user.timezone))
+            if self.auth_user.timezone
+            else workout_date
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        return f"{self.sport.label} - {workout_datetime}"
+
+    def get_visibility_level(
+        self,
+        visibility_level: Literal[
+            "workout_visibility",
+            "media_visibility",
+            "analysis_visibility",
+            "map_visibility",
+        ],
+        workout_data: Union["WorkoutsData", "WorkoutData"],
+    ) -> "VisibilityLevel":
+        if getattr(workout_data, visibility_level):
+            return getattr(workout_data, visibility_level)
+
+        level = (
+            "workouts_visibility"
+            if visibility_level == "workout_visibility"
+            else visibility_level
+        )
+
+        if self.sport_preferences and getattr(self.sport_preferences, level):
+            return getattr(self.sport_preferences, level)
+
+        return getattr(self.auth_user, level)
+
+    @abstractmethod
+    def process(self) -> Tuple[List["Workout"], Dict]:
+        """
+        returns:
+        - list of workouts created successfully
+        - a dict with errored workouts and flag indicating asynchronous
+          processing
+        """
+        pass

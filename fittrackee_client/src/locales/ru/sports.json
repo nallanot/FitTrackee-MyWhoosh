@@ -1,0 +1,86 @@
+{
+  "Canoeing": {
+    "LABEL": "Гребля на каноэ"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Велосипед (спорт)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Велосипед (транспорт)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Велосипед (треккинг)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Велосипед (виртуальный)"
+  },
+  "Halfbike": {
+    "LABEL": "Халфбайк"
+  },
+  "Hiking": {
+    "LABEL": "Хайкинг"
+  },
+  "Ice Skating": {
+    "LABEL": "Катание на коньках"
+  },
+  "Inline Skating": {
+    "LABEL": "Роллерблейдинг"
+  },
+  "Kayaking": {
+    "LABEL": "Гребля на каяке"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Каякинг (по бурной воде)"
+  },
+  "Mountain Biking": {
+    "LABEL": "Горный велосипед"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "Горный велосипед (электро)"
+  },
+  "Mountaineering": {
+    "LABEL": "Альпинизм"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Плавание на открытой воде"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Падел (на открытом воздухе)"
+  },
+  "Paragliding": {
+    "LABEL": "Парапланеризм"
+  },
+  "Rowing": {
+    "LABEL": "Гребля"
+  },
+  "Running": {
+    "LABEL": "Бег"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Горные лыжи"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Лыжные гонки"
+  },
+  "Snowshoes": {
+    "LABEL": "Снегоступы"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Сапсёрфинг"
+  },
+  "Swimrun": {
+    "LABEL": "Свимран"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Теннис (на улице)"
+  },
+  "Trail": {
+    "LABEL": "Трейл"
+  },
+  "Walking": {
+    "LABEL": "Ходьба"
+  },
+  "Windsurfing": {
+    "LABEL": "Виндсёрфинг"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "ABOUT": "关于",
+  "ACTION": "操作",
+  "ACTIVE": "活跃",
+  "CONFIRMATION": "确认",
+  "CONTACT": "联系",
+  "CREATION_DATE": "创建日期",
+  "DATA_IS_LOADING": "正在加载数据…",
+  "DAY": "天",
+  "DESCRIPTION": "描述",
+  "DISABLED": "禁用",
+  "DISPLAYED": "显示",
+  "DOCUMENTATION": "文档",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "不再显示此消息",
+  "EDITED": "已编辑",
+  "ENABLED": "启用",
+  "FILES": "文件",
+  "HERE": "这里",
+  "HIDDEN": "隐藏",
+  "HIDE": "隐藏",
+  "HOME": "主页",
+  "HOURS": "小时",
+  "INACTIVE": "非活跃",
+  "LABEL": "标签",
+  "LAST_UPDATE": "最近更新",
+  "LAST_UPDATED_ON": "最后更新于",
+  "LOADING": "正在加载…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "可以使用 Markdown 语法。",
+  "MINUTES": "分钟",
+  "NEXT": "下一个",
+  "NO": "否",
+  "NO_DESCRIPTION": "无描述",
+  "NO_NOTES": "无备注",
+  "PHOTOS": "照片",
+  "PREVIOUS": "上一个",
+  "REPORT_PLACEHOLDER": "说明举报原因",
+  "REPORT_SUBMITTED": "报告已提交。",
+  "SCROLL_DOWN": "向下滚动",
+  "SCROLL_UP": "向上滚动",
+  "SECONDS": "秒",
+  "SEE_REPORT": "查看报告 {0}。",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "升序",
+      "DESC": "降序",
+      "LABEL": "排序"
+    },
+    "ORDER_BY": {
+      "LABEL": "按"
+    },
+    "PER_PAGE": {
+      "LABEL": "每页"
+    }
+  },
+  "TOTAL": "总计",
+  "TOTAL_DURATION_WITH_PAUSES": "总持续时间（包括暂停）",
+  "TYPE": "类型",
+  "YES": "是"
+}

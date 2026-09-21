@@ -1,0 +1,35 @@
+{
+  "Bike": {
+    "LABEL": "Bike"
+  },
+  "Bike Trainer": {
+    "LABEL": "Bike Trainer"
+  },
+  "Board": {
+    "LABEL": "Board"
+  },
+  "Kayak_Boat": {
+    "LABEL": "Kayak/Boat"
+  },
+  "Skates": {
+    "LABEL": "Skates"
+  },
+  "Misc": {
+    "LABEL": "Misc"
+  },
+  "Paddle": {
+    "LABEL": "Paddle"
+  },
+  "Racket": {
+    "LABEL": "Racket"
+  },
+  "Shoes": {
+    "LABEL": "Shoes"
+  },
+  "Skis": {
+    "LABEL": "Skis"
+  },
+  "Snowshoes": {
+    "LABEL": "Snowshoes"
+  }
+}

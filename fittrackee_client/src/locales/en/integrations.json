@@ -1,0 +1,38 @@
+{
+  "TITLE": "Connections",
+  "MYWHOOSH": {
+    "AUTO_SYNC": "Synchronize automatically",
+    "CONNECT": "Connect MyWhoosh",
+    "CONNECTED": "Connected",
+    "CONNECT_SUCCESS": "MyWhoosh account connected.",
+    "DESCRIPTION": "Import your MyWhoosh rides directly into FitTrackee.",
+    "DISCONNECT": "Disconnect",
+    "DISCONNECT_CONFIRM": "Disconnect MyWhoosh from FitTrackee?",
+    "DISCONNECT_SUCCESS": "MyWhoosh account disconnected.",
+    "DISCONNECTED": "Not connected",
+    "IMPORT_STATUS": {
+      "failed": "failed",
+      "imported": "imported",
+      "pending": "pending"
+    },
+    "LAST_SYNC": "Last synchronization",
+    "GENERIC_ERROR": "An error occurred.",
+    "PASSWORD_NOTE": "Your MyWhoosh password is used only to connect and is never stored.",
+    "RECENT_IMPORTS": "Recent imports",
+    "SAVE_SETTINGS": "Save settings",
+    "SETTINGS_SUCCESS": "Settings saved.",
+    "STATUS": "Status",
+    "STATUS_VALUES": {
+      "disconnected": "disconnected",
+      "error": "error",
+      "in_progress": "synchronization in progress",
+      "needs_reconnect": "reconnection required",
+      "never": "never synchronized",
+      "partial": "completed with errors",
+      "success": "successful"
+    },
+    "SYNC_DAYS": "Import activities from the last number of days",
+    "SYNC_NOW": "Synchronize now",
+    "SYNC_SUCCESS": "Imported: {imported}; already present: {skipped}."
+  }
+}

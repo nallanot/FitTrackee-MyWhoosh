@@ -1,0 +1,64 @@
+from typing import TYPE_CHECKING, List, Tuple, Union
+
+from fittrackee.constants import ElevationDataSource, ElevationProcessing
+
+from .open_elevation_service import OpenElevationService
+from .valhalla_elevation_service import ValhallaElevationService
+
+if TYPE_CHECKING:
+    from gpxpy.gpx import GPXTrackPoint
+
+
+class ElevationService:
+    """
+    Available elevation services:
+    - Open Elevation
+    - Valhalla
+    """
+
+    def __init__(
+        self,
+        elevation_data_source: "ElevationDataSource",
+        elevation_processing: "ElevationProcessing",
+    ) -> None:
+        self.elevation_service, self.elevation_data_source = (
+            self._get_elevation_service(elevation_data_source)
+        )
+        self.elevation_processing = elevation_processing
+
+    @staticmethod
+    def _get_elevation_service(
+        elevation_data_source: "ElevationDataSource",
+    ) -> Tuple[
+        Union["OpenElevationService", "ValhallaElevationService", None],
+        "ElevationDataSource",
+    ]:
+        if elevation_data_source == ElevationDataSource.FILE:
+            return None, elevation_data_source
+
+        service: Union[
+            "OpenElevationService", "ValhallaElevationService", None
+        ] = None
+        if elevation_data_source == ElevationDataSource.OPEN_ELEVATION:
+            service = OpenElevationService()
+
+        if elevation_data_source == ElevationDataSource.VALHALLA:
+            service = ValhallaElevationService()
+
+        if service and service.is_enabled:
+            return service, elevation_data_source
+        return None, ElevationDataSource.FILE
+
+    @property
+    def is_available(self) -> bool:
+        return self.elevation_service is not None
+
+    def get_elevations(
+        self, points: List["GPXTrackPoint"]
+    ) -> Union[List[int], List[float]]:
+        if not self.elevation_service:
+            return []
+
+        return self.elevation_service.get_elevations(
+            points, elevation_processing=self.elevation_processing
+        )

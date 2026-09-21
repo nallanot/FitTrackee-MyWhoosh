@@ -1,0 +1,35 @@
+{
+  "Bike": {
+    "LABEL": "Bicikl"
+  },
+  "Bike Trainer": {
+    "LABEL": "Sobni bicikl"
+  },
+  "Board": {
+    "LABEL": "Daska"
+  },
+  "Kayak_Boat": {
+    "LABEL": "Kajak/čamac"
+  },
+  "Misc": {
+    "LABEL": "Razno"
+  },
+  "Paddle": {
+    "LABEL": "Veslo"
+  },
+  "Racket": {
+    "LABEL": "Reket"
+  },
+  "Shoes": {
+    "LABEL": "Obuća"
+  },
+  "Skates": {
+    "LABEL": "Klizaljke"
+  },
+  "Skis": {
+    "LABEL": "Skije"
+  },
+  "Snowshoes": {
+    "LABEL": "Krpljanje"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "CONTENT": {
+    "ACCOUNT_DELETION": {
+      "CONTENT": "Podes solicitar en todo momento a eliminación da túa conta indo a este enderezo (con sesión iniciada) e premendo no botón \"Eliminar a miña conta\" nos axustes da túa conta.",
+      "TITLE": "Eliminación da conta"
+    },
+    "CHANGES_TO_OUR_PRIVACY_POLICY": {
+      "CONTENT": "Se decidimos cambiar a nosa directiva de privacidade, publicaremos os cambios nesta páxina.\nEste documento está baixo licenza [CC-BY-SA](https://creativecommons.org/licenses/by-sa/4.0/). Adaptado do orixinal da política de privacidade de [Discourse](https://github.com/discourse/discourse).",
+      "TITLE": "Cambios na nosa Directiva de Privacidade"
+    },
+    "DATA_COLLECTED": {
+      "CONTENT": "Recollemos a seguinte información:\n- Información da conta (identificador, enderezo de correo e contrasinal). Poderías engadir información adicional ao perfil como o nome, apelido, data de nacemento, localización, biografía e subir unha foto de perfil.\n- Ficheiros [GPX](https://en.wikipedia.org/wiki/GPS_Exchange_Format). Estes ficheiros conteñen datos relacionados coas túas actividades (coordenadas xeográficas, data, distancia, duración, velocidades máxima e media, altitude, título, descrición, pulso cardíaco…). Se non queres mostrar algún dos datos, elimínaos antes de subir ou engadir adestramentos con ficheiros GPX.\n- Datos do adestramento (deporte, título, descrición, data, duración, distancia, ascenso, descenso, notas).\n- Followers and following users.\n- Comments and likes.\n- Información técnica (nome do navegador e sistema operativo).",
+      "TITLE": "Que información recollemos?"
+    },
+    "INFORMATION_DISCLOSURE": {
+      "CONTENT": "Non vendemos, comerciamos ou transferimos de ningún xeito a terceiras partes externas ningunha información que te identifique persoalmente.\nIsto non inclúe a terceiras partes de confianza que nos axudan a xestionar e proporcionarche o noso servizo, mentras esas terceiras partes acepten manter a confidencialidade desta información.\nPoderiamos liberar esta información sempre que facelo sexa acorde co cumprimento da ley, facer valer as normas do noso sitio web, ou protexa os nosos dereitos e seguridade ou os de outras persoas.\nCando autorizas a terceiras partes a usar a túa conta, dependendo dos permisos concedidos, podería acceder á túa información de perfil ou adestramentos. As aplicacións nunca teñen acceso ao teu contrasinal.",
+      "TITLE": "Mostramos algún tipo de información a terceiras partes externas?"
+    },
+    "INFORMATION_PROTECTION": {
+      "CONTENT": "Tomamos varias medidas de seguridade para gardar a túa información persoal cando inicias sesión, envías ou accedes á túa información persoal.",
+      "TITLE": "Como protexemos a túa información?"
+    },
+    "INFORMATION_USAGE": {
+      "CONTENT": "Toda a información que recollemos de ti pode ser usada para proporcionar o servizo básico de **FitTrackee**:\n- Os ficheiros GPX úsanse para crear actividades, mostrar rutas nun mapa (con [OpenStreetMap](https://www.openstreetmap.org) e o servidor de teselas configurado) e gráficos, crear miniaturas do mapa, calcular records e obter datos meteorolóxicos (se está así establecido).\n- Dependendo do nivel de visibilidade establecido para actividades e comentarios (público, só seguidoras, privado e usuarias mencionadas), outras usuarias poderán ver e interactuar con elas. **Ten en conta que as persoas que xestionan o servidor ou o equipo de moderación podería ver os contidos con visibilidade restrinxida**.\nPodes seguir a outras persoas para ver as súas actividades na túa cronoloxía. As interaccións requiren a creación dunha conta.\n- Non se mostra públicamente toda a información do perfil, excepto o identificador de usuaria, rol, data de creación da conta número de seguimentos e seguidoras, se está suspendida e número de actividades.\n- O enderezo de correo electrónico proporcionado podería usarse para enviarche información e notificacións ou para confirmar modificacións na conta.",
+      "TITLE": "Para que usamos a túa información?"
+    },
+    "SITE_USAGE_BY_CHILDREN": {
+      "CONTENT": "Se este servidor está na UE ou no EEA: a nosa web e servizos están dirixidos a persoas a partir dos 16 anos. Non uses esta web se non tes 16 anos, por requerimento da [GDPR](https://en.wikipedia.org/wiki/General_Data_Protection_Regulation) (General Data Protection Regulation).\nSe este servidor está en EEUU de América: A nosa web, produtos e servizos están dirixidos a persoas a partir dos 13 anos. Se non tes 13 anos, por requerimento da [COPPA](https://en.wikipedia.org/wiki/Children%27s_Online_Privacy_Protection_Act) (Children's Online Privacy Protection Act), non uses esta web.\nOs requerimentos legais poderían ser diferentes se este servidor está baixo outra xurisdición.",
+      "TITLE": "Uso da web por menores"
+    },
+    "YOUR_CONSENT": {
+      "CONTENT": "Ao usar esta web, aceptas a directiva de privacidade desta web.",
+      "TITLE": "O teu consentimento"
+    }
+  },
+  "TITLE": "directiva de privacidade"
+}

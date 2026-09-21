@@ -1,0 +1,19 @@
+{
+  "ANALYSIS_VISIBILITY": "analisien ikusgaitasuna",
+  "CALORIES_VISIBILITY": "kaloriak erakutsi",
+  "COMMENT_LEVELS": {
+    "followers_only": "jarraitzaileek bakarrik",
+    "private": "pribatu (izendatutako erabiltzaileek bakarrik)",
+    "public": "publikoa (edonork)"
+  },
+  "HR_VISIBILITY": "bihotz-maiztasuna erakustea",
+  "LEVELS": {
+    "followers_only": "Jarraitzaileek bakarrik",
+    "private": "pribatua (nik bakarrik)",
+    "public": "publikoa (edonork)"
+  },
+  "MAP_VISIBILITY": "maparen ikusgaitasuna",
+  "VISIBILITY": "ikusgaitasuna",
+  "WORKOUTS_VISIBILITY": "Ekintzen datuen ikusgaitasuna",
+  "WORKOUT_VISIBILITY": "ekintzen ikusgaitasuna"
+}

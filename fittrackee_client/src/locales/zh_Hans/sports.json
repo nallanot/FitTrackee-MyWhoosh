@@ -1,0 +1,89 @@
+{
+  "Canoeing": {
+    "LABEL": "划艇"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "激流划艇"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "骑行（运动）"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "骑行（交通）"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "骑行（徒步旅行）"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "骑行（虚拟）"
+  },
+  "Halfbike": {
+    "LABEL": "Halfbike"
+  },
+  "Hiking": {
+    "LABEL": "徒步"
+  },
+  "Ice Skating": {
+    "LABEL": "滑冰"
+  },
+  "Inline Skating": {
+    "LABEL": "轮滑"
+  },
+  "Kayaking": {
+    "LABEL": "皮艇"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "激流皮艇"
+  },
+  "Mountain Biking": {
+    "LABEL": "山地自行车"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "山地自行车（电动）"
+  },
+  "Mountaineering": {
+    "LABEL": "登山"
+  },
+  "Open Water Swimming": {
+    "LABEL": "开放水域游泳"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "室外板式网球"
+  },
+  "Paragliding": {
+    "LABEL": "滑翔伞"
+  },
+  "Rowing": {
+    "LABEL": "划船"
+  },
+  "Running": {
+    "LABEL": "跑步"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "滑雪（高山）"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "滑雪（越野）"
+  },
+  "Snowshoes": {
+    "LABEL": "雪鞋"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "立式划桨运动"
+  },
+  "Swimrun": {
+    "LABEL": "游泳跑步"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "网球（户外）"
+  },
+  "Trail": {
+    "LABEL": "越野"
+  },
+  "Walking": {
+    "LABEL": "步行"
+  },
+  "Windsurfing": {
+    "LABEL": "帆板"
+  }
+}

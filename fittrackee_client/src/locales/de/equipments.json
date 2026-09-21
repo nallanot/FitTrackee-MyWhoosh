@@ -1,0 +1,19 @@
+{
+  "50_CHARACTERS_MAX": "Maximal 50 Zeichen",
+  "ADD_A_NEW_EQUIPMENT": "Neue Ausrüstung hinzufügen",
+  "ALL_WORKOUTS_ASSOCIATIONS_REMOVED": "Alle Workout-Assoziationen werden entfernt.",
+  "DEFAULT_FOR_SPORTS": "Standard für Sport",
+  "EDIT_EQUIPMENTS": "Ausrüstung bearbeiten",
+  "EQUIPMENT": "Ausrüstung|Ausrüstungen",
+  "EQUIPMENT_TYPE": "Ausrüstungstyp|Ausrüstungstypen",
+  "ERRORS": {
+    "inactive": "Ausrüstung \"{equipmentLabel}\" ist inaktiv.",
+    "invalid": "Ausrüstung \"{equipmentLabel}\" ist für diesen Sport ungültig.",
+    "limit_exceeded": "Diese Ausrüstung überschreitet den maximalen Wert von 5 Geräten für die Sportart {sportLabels}. | Diese Ausrüstung überschreitet die maximale Grenze von 5 Geräten für die folgenden Sportarten: {sportLabels}.",
+    "not_found": "Ausrüstung wurde nicht gefunden."
+  },
+  "NEW_EQUIPMENT": "Neue Ausrüstung",
+  "NO_EQUIPMENT": "Keine Ausrüstung gefunden.",
+  "NO_EQUIPMENTS": "Keine Ausrüstungen",
+  "WITHOUT_EQUIPMENTS": "ohne Ausrüstung"
+}

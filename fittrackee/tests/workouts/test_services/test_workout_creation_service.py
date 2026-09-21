@@ -1,0 +1,1076 @@
+import re
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Dict
+
+import pytest
+
+from fittrackee import db
+from fittrackee.constants import ElevationDataSource
+from fittrackee.database import PSQL_INTEGER_LIMIT
+from fittrackee.equipments.exceptions import (
+    InvalidEquipmentException,
+    InvalidEquipmentsException,
+)
+from fittrackee.tests.mixins import EquipmentMixin, MediaMixin, RandomMixin
+from fittrackee.visibility_levels import VisibilityLevel
+from fittrackee.workouts.exceptions import (
+    WorkoutExceedingValueException,
+    WorkoutException,
+)
+from fittrackee.workouts.models import (
+    DESCRIPTION_MAX_CHARACTERS,
+    NOTES_MAX_CHARACTERS,
+    TITLE_MAX_CHARACTERS,
+    WORKOUT_VALUES_LIMIT,
+    Record,
+    Sport,
+    Workout,
+    WorkoutSegment,
+)
+from fittrackee.workouts.services.workout_creation_service import (
+    WorkoutCreationService,
+    WorkoutData,
+)
+
+if TYPE_CHECKING:
+    from flask import Flask
+
+    from fittrackee.equipments.models import Equipment
+    from fittrackee.users.models import User, UserSportPreference
+
+
+class TestWorkoutCreationServiceInit(MediaMixin):
+    def test_it_instantiates_service_with_minimal_data(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        workout_data = {
+            "distance": 18.0,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        assert service.auth_user == user_1
+        assert service.equipment_ids is None
+        assert service.sport_preferences is None
+        assert (
+            service.stopped_speed_threshold
+            == sport_1_cycling.stopped_speed_threshold
+        )
+        assert service.workout_data == WorkoutData(**workout_data)  # type: ignore
+
+    def test_it_instantiates_service_with_all_data(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        equipment_bike_user_1: "Equipment",
+    ) -> None:
+        media = self.create_media(user_1)
+        workout_data = {
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "ascent": 10,
+            "descent": 35,
+            "description": "just a description",
+            "equipment_ids": [equipment_bike_user_1.short_id],
+            "notes": "some notes",
+            "title": "workout title",
+            "workout_visibility": VisibilityLevel.PUBLIC,
+            "calories": 550,
+            "media_attachment_ids": [media.short_id],
+            "media_visibility": VisibilityLevel.FOLLOWERS,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        assert service.auth_user == user_1
+        assert service.equipment_ids == [equipment_bike_user_1.short_id]
+        assert service.sport_preferences is None
+        assert (
+            service.stopped_speed_threshold
+            == sport_1_cycling.stopped_speed_threshold
+        )
+        assert service.workout_data == WorkoutData(**workout_data)  # type: ignore
+
+
+class TestWorkoutCreationServiceGetWorkoutDate(RandomMixin):
+    def test_it_raises_error_when_workout_date_format_is_invalid(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-09",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutException, match="invalid format for workout date"
+        ):
+            service.get_workout_date()
+
+    def test_it_returns_workout_date_when_timezone_is_set_for_user(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1_paris: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1_paris, workout_data)
+
+        workout_date = service.get_workout_date()
+
+        assert workout_date == datetime(2025, 2, 8, 8, tzinfo=timezone.utc)
+
+    def test_it_returns_workout_date_when_no_timezone_set_for_user(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        workout_date = service.get_workout_date()
+
+        assert workout_date == datetime(2025, 2, 8, 9, tzinfo=timezone.utc)
+
+
+@pytest.mark.disable_autouse_update_records_patch
+class TestWorkoutCreationServiceProcess(
+    RandomMixin, EquipmentMixin, MediaMixin
+):
+    def test_it_creates_workout_with_minimal_data(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        # workout
+        workout = Workout.query.one()
+        assert workout.analysis_visibility == VisibilityLevel.PRIVATE
+        assert workout.ascent is None
+        assert workout.ave_cadence is None
+        assert workout.ave_hr is None
+        assert str(workout.ave_pace) == "0:03:20"
+        assert workout.ave_power is None
+        assert float(workout.ave_speed) == 18.0
+        assert str(workout.best_pace) == "0:03:20"
+        assert workout.bounds is None
+        assert workout.calories is None
+        assert workout.creation_date is not None
+        assert workout.descent is None
+        assert workout.description is None
+        assert float(workout.distance) == 15.0
+        assert workout.duration == timedelta(minutes=50)
+        assert workout.elevation_data_source == ElevationDataSource.FILE
+        assert workout.map is None
+        assert workout.map_id is None
+        assert workout.map_visibility == VisibilityLevel.PRIVATE
+        assert workout.max_alt is None
+        assert workout.max_cadence is None
+        assert workout.max_hr is None
+        assert workout.max_power is None
+        assert workout.max_speed == 18.0
+        assert workout.media_visibility == VisibilityLevel.PRIVATE
+        assert workout.min_alt is None
+        assert workout.modification_date is None
+        assert workout.moving == timedelta(minutes=50)
+        assert workout.notes is None
+        assert workout.original_file is None
+        assert workout.pauses == timedelta(seconds=0)
+        assert workout.sport_id == sport_1_cycling.id
+        assert workout.start_point_geom is None
+        assert workout.suspended_at is None
+        assert workout.title == "Cycling (Sport) - 2025-02-08 09:00:00"
+        assert workout.user_id == user_1.id
+        assert workout.weather_start is None
+        assert workout.weather_end is None
+        assert workout.workout_date == datetime(
+            2025, 2, 8, 9, tzinfo=timezone.utc
+        )
+        assert workout.workout_visibility == VisibilityLevel.PRIVATE
+        # segment
+        assert WorkoutSegment.query.count() == 0
+        # records
+        records = Record.query.order_by(Record.record_type.asc()).all()
+        assert len(records) == 6
+        assert records[0].serialize() == {
+            "id": 1,
+            "record_type": "AP",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.ave_pace),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[1].serialize() == {
+            "id": 2,
+            "record_type": "AS",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.ave_speed,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[2].serialize() == {
+            "id": 3,
+            "record_type": "BP",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.best_pace),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[3].serialize() == {
+            "id": 4,
+            "record_type": "FD",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.distance,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[4].serialize() == {
+            "id": 5,
+            "record_type": "LD",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.duration),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[5].serialize() == {
+            "id": 6,
+            "record_type": "MS",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.max_speed,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+
+    def test_it_creates_workout_with_sport_with_pace(
+        self,
+        app: "Flask",
+        sport_2_running: "Sport",
+        user_1: "User",
+    ) -> None:
+        workout_data = {
+            "distance": 7,
+            "duration": 3600,
+            "sport_id": sport_2_running.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        # workout
+        workout = Workout.query.one()
+        assert workout.analysis_visibility == VisibilityLevel.PRIVATE
+        assert workout.ascent is None
+        assert workout.ave_cadence is None
+        assert workout.ave_hr is None
+        assert str(workout.ave_pace) == "0:08:34"
+        assert workout.ave_power is None
+        assert float(workout.ave_speed) == 7.0
+        assert str(workout.best_pace) == "0:08:34"
+        assert workout.bounds is None
+        assert workout.calories is None
+        assert workout.creation_date is not None
+        assert workout.descent is None
+        assert workout.description is None
+        assert float(workout.distance) == 7.0
+        assert workout.duration == timedelta(hours=1)
+        assert workout.elevation_data_source == ElevationDataSource.FILE
+        assert workout.map is None
+        assert workout.map_id is None
+        assert workout.map_visibility == VisibilityLevel.PRIVATE
+        assert workout.max_alt is None
+        assert workout.max_cadence is None
+        assert workout.max_hr is None
+        assert workout.max_power is None
+        assert workout.max_speed == 7.0
+        assert workout.media_visibility == VisibilityLevel.PRIVATE
+        assert workout.min_alt is None
+        assert workout.modification_date is None
+        assert workout.moving == timedelta(hours=1)
+        assert workout.notes is None
+        assert workout.original_file is None
+        assert workout.pauses == timedelta(seconds=0)
+        assert workout.sport_id == sport_2_running.id
+        assert workout.start_point_geom is None
+        assert workout.suspended_at is None
+        assert workout.title == "Running - 2025-02-08 09:00:00"
+        assert workout.user_id == user_1.id
+        assert workout.weather_start is None
+        assert workout.weather_end is None
+        assert workout.workout_date == datetime(
+            2025, 2, 8, 9, tzinfo=timezone.utc
+        )
+        assert workout.workout_visibility == VisibilityLevel.PRIVATE
+        # segment
+        assert WorkoutSegment.query.count() == 0
+        # records
+        records = Record.query.order_by(Record.record_type.asc()).all()
+        assert len(records) == 6
+        assert records[0].serialize() == {
+            "id": 1,
+            "record_type": "AP",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.ave_pace),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[1].serialize() == {
+            "id": 2,
+            "record_type": "AS",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.ave_speed,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[2].serialize() == {
+            "id": 3,
+            "record_type": "BP",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.best_pace),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[3].serialize() == {
+            "id": 4,
+            "record_type": "FD",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.distance,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[4].serialize() == {
+            "id": 5,
+            "record_type": "LD",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": str(workout.duration),
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+        assert records[5].serialize() == {
+            "id": 6,
+            "record_type": "MS",
+            "sport_id": workout.sport_id,
+            "user": workout.user.username,
+            "value": workout.max_speed,
+            "workout_date": workout.workout_date,
+            "workout_id": workout.short_id,
+        }
+
+    def test_it_returns_new_workout(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        service = WorkoutCreationService(
+            user_1,
+            {
+                "distance": 15,
+                "duration": 3000,
+                "sport_id": sport_1_cycling.id,
+                "workout_date": "2025-02-08 09:00",
+            },
+        )
+
+        [new_workout], _ = service.process()
+        db.session.commit()
+
+        assert new_workout == Workout.query.one()
+
+    def test_it_creates_workout_with_low_value_for_distance(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        distance = 0.001
+        service = WorkoutCreationService(
+            user_1,
+            {
+                "distance": distance,
+                "duration": 3000,
+                "sport_id": sport_1_cycling.id,
+                "workout_date": "2025-02-08 09:00",
+            },
+        )
+
+        service.process()
+        db.session.commit()
+
+        new_workout = Workout.query.one()
+        assert float(new_workout.distance) == distance
+
+    @pytest.mark.parametrize(
+        "input_description, input_elevation_data",
+        [
+            ("missing descent", {"ascent": 50}),
+            ("missing ascent", {"descent": 50}),
+            ("invalid ascent", {"ascent": "invalid", "descent": 50}),
+            ("invalid descent", {"ascent": 50, "descent": "invalid"}),
+        ],
+    )
+    def test_it_raises_error_when_elevation_data_are_invalid(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        input_description: str,
+        input_elevation_data: Dict,
+    ) -> None:
+        workout_data = {
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-09 08:00",
+            **input_elevation_data,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutException, match="invalid ascent or descent"
+        ):
+            service.process()
+
+    @pytest.mark.parametrize("input_key", ["distance", "ascent", "descent"])
+    def test_it_raises_error_when_workout_value_exceeds_limit(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        input_key: str,
+    ) -> None:
+        workout_data = {
+            "ascent": 120,
+            "descent": 80,
+            "distance": 18,
+            "duration": 3600,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-09 08:00",
+            **{input_key: WORKOUT_VALUES_LIMIT[input_key] + 0.001},
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutExceedingValueException,
+            match=(
+                "one or more values, entered or calculated, exceed the limits"
+            ),
+        ):
+            service.process()
+
+    def test_it_raises_error_when_duration_exceeds_limit(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        workout_data = {
+            "ascent": 120,
+            "descent": 80,
+            "distance": 18,
+            "duration": PSQL_INTEGER_LIMIT + 1,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-09 08:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutExceedingValueException,
+            match=(
+                "one or more values, entered or calculated, exceed the limits"
+            ),
+        ):
+            service.process()
+
+    def test_it_raises_error_when_speed_exceeds_limit(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+    ) -> None:
+        workout_data = {
+            "sport_id": sport_1_cycling.id,
+            "duration": 36,
+            "workout_date": "2023-07-26 12:00",
+            "distance": 100,
+            "ascent": 120,
+            "descent": 80,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutExceedingValueException,
+            match=(
+                "one or more values, entered or calculated, exceed the limits"
+            ),
+        ):
+            service.process()
+
+    @pytest.mark.parametrize(
+        "input_description, input_elevation_data",
+        [
+            ("null values", {"ascent": None, "descent": None}),
+            ("not null values", {"ascent": 50, "descent": 75}),
+        ],
+    )
+    def test_it_creates_workout_with_given_elevation_data(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        input_description: str,
+        input_elevation_data: Dict,
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            **input_elevation_data,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.ascent == input_elevation_data["ascent"]
+        assert workout.descent == input_elevation_data["descent"]
+        assert Record.query.filter_by(
+            workout_id=workout.id, record_type="HA"
+        ).count() == (0 if input_elevation_data["ascent"] is None else 1)
+
+    def test_it_creates_workout_when_title_is_provided(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "title": "my workout",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.title == "my workout"
+
+    def test_it_creates_workout_when_title_length_exceeds_limit(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        title = self.random_string(TITLE_MAX_CHARACTERS + 1)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "title": title,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.title == (title[:TITLE_MAX_CHARACTERS])
+
+    def test_it_creates_workout_when_description_is_provided(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "description": "my workout description",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.description == "my workout description"
+
+    def test_it_creates_workout_when_description_length_exceeds_limit(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        description = self.random_string(DESCRIPTION_MAX_CHARACTERS + 1)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "description": description,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert (
+            workout.description == (description[:DESCRIPTION_MAX_CHARACTERS])
+        )
+
+    def test_it_creates_workout_when_notes_are_provided(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "notes": "workouts notes",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.notes == "workouts notes"
+
+    def test_it_creates_workout_when_notes_length_exceeds_limit(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        notes = self.random_string(NOTES_MAX_CHARACTERS + 1)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "notes": notes,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.notes == (notes[:NOTES_MAX_CHARACTERS])
+
+    def test_it_creates_workout_with_given_visibilities(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "media_visibility": VisibilityLevel.FOLLOWERS,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "workout_visibility": VisibilityLevel.PUBLIC,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.media_visibility == VisibilityLevel.FOLLOWERS
+        assert workout.workout_visibility == VisibilityLevel.PUBLIC
+
+    def test_it_creates_workout_with_valid_media_visibility(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "media_visibility": VisibilityLevel.PUBLIC,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "workout_visibility": VisibilityLevel.FOLLOWERS,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.media_visibility == VisibilityLevel.FOLLOWERS
+        assert workout.workout_visibility == VisibilityLevel.FOLLOWERS
+
+    def test_it_creates_workout_with_user_visibility(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        user_1.media_visibility = VisibilityLevel.PRIVATE
+        user_1.workouts_visibility = VisibilityLevel.FOLLOWERS
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.media_visibility == VisibilityLevel.PRIVATE
+        assert workout.workout_visibility == VisibilityLevel.FOLLOWERS
+
+    def test_it_creates_workout_with_sport_preferences_visibility_levels(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        user_1_sport_1_preference: "UserSportPreference",
+    ) -> None:
+        user_1.media_visibility = VisibilityLevel.PUBLIC
+        user_1.workouts_visibility = VisibilityLevel.PUBLIC
+        user_1_sport_1_preference.media_visibility = VisibilityLevel.FOLLOWERS
+        user_1_sport_1_preference.workouts_visibility = (
+            VisibilityLevel.FOLLOWERS
+        )
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.media_visibility == VisibilityLevel.FOLLOWERS
+        assert workout.workout_visibility == VisibilityLevel.FOLLOWERS
+
+    def test_it_raises_error_when_equipment_is_invalid_for_sport(
+        self,
+        app: "Flask",
+        sport_2_running: "Sport",
+        user_1: "User",
+        equipment_bike_user_1: "Equipment",
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_2_running.id,
+            "workout_date": "2025-02-08 09:00",
+            "equipment_ids": [equipment_bike_user_1.short_id],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            InvalidEquipmentException,
+            match=re.escape(
+                f"invalid equipment id {equipment_bike_user_1.short_id} "
+                f"for sport {sport_2_running.label}"
+            ),
+        ):
+            service.process()
+
+    def test_it_creates_workout_with_given_equipment(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        equipment_bike_user_1: "Equipment",
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "equipment_ids": [equipment_bike_user_1.short_id],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.equipments == [equipment_bike_user_1]
+
+    def test_it_creates_workout_with_default_equipment(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        equipment_bike_user_1: "Equipment",
+        user_1_sport_1_preference: "UserSportPreference",
+    ) -> None:
+        self.add_user_sport_preference_equipement(
+            [equipment_bike_user_1], user_1_sport_1_preference
+        )
+        db.session.commit()
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.equipments == [equipment_bike_user_1]
+
+    def test_it_creates_workout_without_default_equipment_when_empty_list_provided(  # noqa
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        equipment_bike_user_1: "Equipment",
+        user_1_sport_1_preference: "UserSportPreference",
+    ) -> None:
+        self.add_user_sport_preference_equipement(
+            [equipment_bike_user_1], user_1_sport_1_preference
+        )
+        db.session.commit()
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "equipment_ids": [],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.equipments == []
+
+    def test_it_creates_with_multiple_pieces_of_equipment(
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_1_cycling: "Sport",
+        equipment_shoes_user_1: "Equipment",
+        equipment_bike_user_1: "Equipment",
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "equipment_ids": [
+                equipment_shoes_user_1.short_id,
+                equipment_bike_user_1.short_id,
+            ],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert set(workout.equipments) == {
+            equipment_bike_user_1,
+            equipment_shoes_user_1,
+        }
+
+    def test_it_raises_exception_when_multiple_pieces_of_equipment_with_same_type_are_provided(  # noqa
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_2_running: "Sport",
+        gpx_file: str,
+        equipment_shoes_user_1: "Equipment",
+        equipment_another_shoes_user_1: "Equipment",
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_2_running.id,
+            "workout_date": "2025-02-08 09:00",
+            "equipment_ids": [
+                equipment_shoes_user_1.short_id,
+                equipment_another_shoes_user_1.short_id,
+            ],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            InvalidEquipmentsException,
+            match="only one piece of equipment per type can be provided",
+        ):
+            service.process()
+
+    def test_it_does_not_add_inactive_default_equipment(
+        self,
+        app: "Flask",
+        user_1: "User",
+        sport_1_cycling: "Sport",
+        equipment_bike_user_1: "Equipment",
+        user_1_sport_1_preference: "UserSportPreference",
+    ) -> None:
+        self.add_user_sport_preference_equipement(
+            [equipment_bike_user_1], user_1_sport_1_preference
+        )
+        equipment_bike_user_1.is_active = False
+        db.session.commit()
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.equipments == []
+        assert equipment_bike_user_1.total_workouts == 0
+        assert equipment_bike_user_1.total_distance == 0.0
+        assert equipment_bike_user_1.total_duration == timedelta()
+        assert equipment_bike_user_1.total_moving == timedelta()
+
+    def test_it_creates_workout_when_calories_are_provided(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "calories": 653,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.calories == 653
+
+    def test_it_raises_error_when_calories_value_is_invalid(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "calories": PSQL_INTEGER_LIMIT + 1,
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        with pytest.raises(
+            WorkoutExceedingValueException,
+            match=(
+                "one or more values, entered or calculated, exceed the limits"
+            ),
+        ):
+            service.process()
+
+    def test_it_creates_workout_with_given_media_attachments(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        media_1 = self.create_media(user_1)
+        media_2 = self.create_media(user_1)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "media_attachment_ids": [media_1.short_id, media_2.short_id],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.get_media_attachments(True) == [media_1, media_2]
+
+    def test_it_ignores_not_found_media(
+        self, app: "Flask", sport_1_cycling: "Sport", user_1: "User"
+    ) -> None:
+        media = self.create_media(user_1)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "media_attachment_ids": [self.random_short_id(), media.short_id],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.get_media_attachments(True) == [media]
+
+    def test_it_ignores_media_belonging_to_another_user(
+        self,
+        app: "Flask",
+        sport_1_cycling: "Sport",
+        user_1: "User",
+        user_2: "User",
+    ) -> None:
+        media_user_1_1 = self.create_media(user_1)
+        media_user_1_2 = self.create_media(user_1)
+        media_user_2 = self.create_media(user_2)
+        workout_data = {
+            "distance": 15,
+            "duration": 3000,
+            "sport_id": sport_1_cycling.id,
+            "workout_date": "2025-02-08 09:00",
+            "media_attachment_ids": [
+                media_user_1_1.short_id,
+                media_user_2.short_id,
+                media_user_1_2.short_id,
+            ],
+        }
+        service = WorkoutCreationService(user_1, workout_data)
+
+        service.process()
+        db.session.commit()
+
+        workout = Workout.query.one()
+        assert workout.get_media_attachments(True) == [
+            media_user_1_1,
+            media_user_1_2,
+        ]
+        db.session.refresh(media_user_2)
+        assert media_user_2.workout_id is None

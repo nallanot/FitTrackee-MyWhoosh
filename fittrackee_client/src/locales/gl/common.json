@@ -1,0 +1,59 @@
+{
+  "ABOUT": "sobre",
+  "ACTION": "acción",
+  "ACTIVE": "activo",
+  "CONFIRMATION": "Confirmación",
+  "CONTACT": "contacto",
+  "CREATION_DATE": "data de creación",
+  "DATA_IS_LOADING": "cargando datos…",
+  "DAY": "día | días",
+  "DESCRIPTION": "Descrición",
+  "DISABLED": "desactivado",
+  "DISPLAYED": "Mostrado",
+  "DOCUMENTATION": "documentación",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "Non volver a mostrar esta mensaxe",
+  "EDITED": "editado",
+  "ENABLED": "activado",
+  "FILES": "Ficheiros",
+  "HERE": "aquí",
+  "HIDDEN": "Agochado",
+  "HIDE": "Ocultar",
+  "HOME": "Inicio",
+  "HOURS": "hora|horas",
+  "INACTIVE": "non activo",
+  "LABEL": "etiqueta",
+  "LAST_UPDATE": "Última actualización",
+  "LAST_UPDATED_ON": "Última actualización",
+  "LOADING": "cargando…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Pódese usar a sintaxe de Markdown.",
+  "MINUTES": "minuto|minutos",
+  "NEXT": "seguinte",
+  "NO": "Non",
+  "NO_DESCRIPTION": "Sen descrición",
+  "NO_NOTES": "Sen notas",
+  "PHOTOS": "fotos",
+  "PREVIOUS": "anterior",
+  "REPORT_PLACEHOLDER": "indica a razón para denunciar",
+  "REPORT_SUBMITTED": "Denuncia enviada.",
+  "SCROLL_DOWN": "Desprazarse abaixo",
+  "SCROLL_UP": "Desprazarse arriba",
+  "SECONDS": "segundo|segundos",
+  "SEE_REPORT": "Ver denuncia {0}.",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "ascenso",
+      "DESC": "descenso",
+      "LABEL": "orde"
+    },
+    "ORDER_BY": {
+      "LABEL": "ordenar por"
+    },
+    "PER_PAGE": {
+      "LABEL": "por páxina"
+    }
+  },
+  "TOTAL": "total",
+  "TOTAL_DURATION_WITH_PAUSES": "duración total con pausas",
+  "TYPE": "tipo",
+  "YES": "Si"
+}

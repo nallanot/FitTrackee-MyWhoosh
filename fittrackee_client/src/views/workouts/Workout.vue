@@ -1,0 +1,276 @@
+<template>
+  <div id="workout" class="view">
+    <div class="container">
+      <div class="workout-container" v-if="sports.length > 0">
+        <div v-if="workoutData.workout.id">
+          <WorkoutUser :user="workoutData.workout.user"></WorkoutUser>
+          <div
+            class="box suspended"
+            v-if="workoutData.workout.suspended && !isWorkoutOwner"
+          >
+            {{ $t('workouts.SUSPENDED_BY_ADMIN') }}
+          </div>
+          <WorkoutDetail
+            v-else
+            :workoutData="workoutData"
+            :segment="segment"
+            :sport="workoutSport"
+            :authUser="authUser"
+            :markerCoordinates="markerCoordinates"
+            :displaySegment="displaySegment"
+            :isWorkoutOwner="isWorkoutOwner"
+            :cadenceUnit="cadenceUnit"
+            :isRefreshing="isRefreshing"
+          />
+          <WorkoutChart
+            v-if="workoutData.workout.with_analysis"
+            :workoutData="workoutData"
+            :isRefreshing="isRefreshing"
+            :authUser="authUser"
+            :sport="sport"
+            :cadenceUnit="cadenceUnit"
+            :isWorkoutOwner="isWorkoutOwner"
+            @getCoordinates="updateCoordinates"
+          />
+          <WorkoutMediaGallery
+            v-if="
+              !displaySegment &&
+              workoutData.workout.media_attachments.length > 0
+            "
+            :media-attachments="workoutData.workout.media_attachments"
+            :media-visibility="workoutData.workout.media_visibility"
+            :is-workout-owner="isWorkoutOwner"
+            :workout-id="workoutData.workout.id"
+          />
+          <WorkoutContent
+            v-if="!displaySegment"
+            :workout-id="workoutData.workout.id"
+            content-type="DESCRIPTION"
+            :content="workoutData.workout.description"
+            :loading="workoutData.loading"
+            :disabled="isRefreshing"
+            :allow-edition="isWorkoutOwner"
+          />
+          <WorkoutSegments
+            v-if="!displaySegment && workoutData.workout.segments.length > 1"
+            :authUser="authUser"
+            :multi-sports-stats="workoutData.workout.multi_sports_stats"
+            :segments="workoutData.workout.segments"
+            :useImperialUnits="displayOptions.useImperialUnits"
+          />
+          <WorkoutContent
+            v-if="isWorkoutOwner && !displaySegment"
+            :workout-id="workoutData.workout.id"
+            content-type="NOTES"
+            :content="workoutData.workout.notes"
+            :disabled="isRefreshing"
+            :loading="workoutData.loading"
+          />
+          <Comments
+            v-if="!displaySegment"
+            :workoutData="workoutData"
+            :disabled="isRefreshing"
+            :auth-user="authUser"
+          />
+          <div id="bottom" />
+        </div>
+        <div v-else>
+          <NotFound
+            v-if="!workoutData.loading"
+            :target="displaySegment ? 'SEGMENT' : 'WORKOUT'"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+  import {
+    computed,
+    nextTick,
+    onBeforeMount,
+    onUnmounted,
+    onMounted,
+    ref,
+    toRefs,
+    watch,
+  } from 'vue'
+  import type { ComputedRef, Ref } from 'vue'
+  import { useRoute } from 'vue-router'
+
+  import Comments from '@/components/Comment/Comments.vue'
+  import NotFound from '@/components/Common/NotFound.vue'
+  import WorkoutDetail from '@/components/Workout/WorkoutDetail/index.vue'
+  import WorkoutChart from '@/components/Workout/WorkoutDetail/WorkoutChart/index.vue'
+  import WorkoutContent from '@/components/Workout/WorkoutDetail/WorkoutContent.vue'
+  import WorkoutMediaGallery from '@/components/Workout/WorkoutDetail/WorkoutMediaGallery.vue'
+  import WorkoutSegments from '@/components/Workout/WorkoutDetail/WorkoutSegments/index.vue'
+  import WorkoutUser from '@/components/Workout/WorkoutDetail/WorkoutUser.vue'
+  import useApp from '@/composables/useApp.ts'
+  import useAuthUser from '@/composables/useAuthUser'
+  import useScroll from '@/composables/useScroll.ts'
+  import useSports from '@/composables/useSports'
+  import {
+    SPORTS_STORE,
+    TILE_PROVIDERS_STORE,
+    WORKOUTS_STORE,
+  } from '@/store/constants'
+  import type { TCoordinates } from '@/types/map'
+  import type { ISport } from '@/types/sports.ts'
+  import type {
+    IWorkoutData,
+    IWorkoutPayload,
+    IWorkoutSegment,
+    TCadenceUnit,
+  } from '@/types/workouts'
+  import { useStore } from '@/use/useStore'
+  import { getCadenceUnit } from '@/utils/workouts.ts'
+
+  interface Props {
+    displaySegment: boolean
+  }
+  const props = defineProps<Props>()
+  const { displaySegment } = toRefs(props)
+
+  const route = useRoute()
+  const store = useStore()
+
+  const { authUser } = useAuthUser()
+  const { displayOptions } = useApp()
+  const { getObjectSport, sports } = useSports()
+  const { resetTimeout, scrollTo } = useScroll()
+
+  const markerCoordinates: Ref<TCoordinates> = ref({
+    latitude: null,
+    longitude: null,
+  })
+
+  const workoutData: ComputedRef<IWorkoutData> = computed(
+    () => store.getters[WORKOUTS_STORE.GETTERS.WORKOUT_DATA]
+  )
+  const isRefreshing: ComputedRef<boolean> = computed(
+    () => workoutData.value.refreshLoading || workoutData.value.elevationLoading
+  )
+  const isWorkoutOwner: ComputedRef<boolean> = computed(
+    () => authUser.value.username === workoutData.value.workout.user.username
+  )
+  const segmentId: Ref<string | null> = ref(
+    route.params.workoutId ? (route.params.segmentId as string) : null
+  )
+  const segment: ComputedRef<IWorkoutSegment | undefined> = computed(() =>
+    workoutData.value.workout.segments.length > 0 && segmentId.value
+      ? workoutData.value.workout.segments.find(
+          (segment) => segment.segment_id === segmentId.value
+        )
+      : undefined
+  )
+  const workoutSport: ComputedRef<ISport | null> = computed(() =>
+    getObjectSport(workoutData.value.workout)
+  )
+  const sport: ComputedRef<ISport | null> = computed(() =>
+    displaySegment.value && segment.value?.sport_id
+      ? getObjectSport(segment.value)
+      : workoutSport.value
+  )
+  const cadenceUnit: ComputedRef<TCadenceUnit> = computed(() =>
+    getCadenceUnit(sport.value?.label)
+  )
+
+  function updateCoordinates(coordinates: TCoordinates) {
+    markerCoordinates.value = {
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+    }
+  }
+
+  watch(
+    () => route.params.workoutId,
+    async (newWorkoutId) => {
+      if (newWorkoutId) {
+        store.dispatch(WORKOUTS_STORE.ACTIONS.GET_WORKOUT_DATA, {
+          workoutId: newWorkoutId,
+        })
+      }
+    }
+  )
+  watch(
+    () => route.params.segmentId,
+    async (newSegmentId) => {
+      if (route.params.workoutId) {
+        const payload: IWorkoutPayload = {
+          workoutId: route.params.workoutId,
+        }
+        if (newSegmentId) {
+          segmentId.value = newSegmentId as string
+          payload.segmentId = newSegmentId
+        } else {
+          segmentId.value = null
+        }
+        store.dispatch(WORKOUTS_STORE.ACTIONS.GET_WORKOUT_DATA, payload)
+      }
+    }
+  )
+
+  onBeforeMount(() => {
+    const payload: IWorkoutPayload = { workoutId: route.params.workoutId }
+    if (props.displaySegment) {
+      payload.segmentId = route.params.segmentId
+    }
+    store.dispatch(WORKOUTS_STORE.ACTIONS.GET_WORKOUT_DATA, payload)
+    if (sports.value.length === 0) {
+      store.dispatch(SPORTS_STORE.ACTIONS.GET_SPORTS)
+    }
+    store.dispatch(TILE_PROVIDERS_STORE.ACTIONS.GET_TILE_PROVIDERS)
+  })
+  onMounted(() => {
+    nextTick(() => {
+      if (route.hash) {
+        scrollTo(route.hash.replace('#', ''), 300)
+      }
+    })
+  })
+  onUnmounted(() => {
+    resetTimeout()
+    store.commit(WORKOUTS_STORE.MUTATIONS.EMPTY_WORKOUT)
+  })
+</script>
+
+<style lang="scss" scoped>
+  @use '~@/scss/vars.scss' as *;
+  #workout {
+    display: flex;
+    .container {
+      width: 100%;
+      padding: 0;
+      .workout-container {
+        width: 100%;
+
+        .user-header {
+          align-items: center;
+          ::v-deep(.user-picture) {
+            img {
+              height: 50px;
+              width: 50px;
+            }
+            .no-picture {
+              font-size: 3em;
+            }
+          }
+          ::v-deep(.user-details) {
+            flex-direction: row;
+          }
+        }
+      }
+      .workout-loading {
+        height: $app-height;
+        width: 100%;
+        .loading {
+          display: flex;
+          align-items: center;
+          height: 100%;
+        }
+      }
+    }
+  }
+</style>

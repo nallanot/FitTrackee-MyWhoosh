@@ -1,0 +1,38 @@
+import os
+from enum import Enum, IntEnum
+
+TASKS_TIME_LIMIT = int(os.environ.get("TASKS_TIME_LIMIT", "1800")) * 1000
+
+
+class TaskPriority(IntEnum):
+    LOW = 100
+    MEDIUM = 50
+    HIGH = 0
+
+
+class ElevationDataSource(str, Enum):  # to make enum serializable
+    FILE = "file"
+    OPEN_ELEVATION = "open_elevation"
+    VALHALLA = "valhalla"
+
+
+class ElevationProcessing(str, Enum):  # to make enum serializable
+    NONE = "none"  # elevations remain unchanged
+    FLAT_WINDOW = "flat_window"  # moving average smoothing
+
+
+class PaceSpeedDisplay(str, Enum):
+    PACE = "pace"  # min/km
+    SPEED = "speed"
+    PACE_AND_SPEED = "pace_and_speed"
+
+
+IMAGE_MIMETYPES = {
+    "gif": ["image/gif"],
+    "jpeg": ["image/jpeg"],
+    "jpg": ["image/jpeg"],
+    "png": ["image/png"],
+    "webp": ["image/webp"],
+}
+
+DEFAULT_TILE_PROVIDER = "osm"

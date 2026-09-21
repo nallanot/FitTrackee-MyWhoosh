@@ -1,0 +1,60 @@
+{
+  "ABOUT": "about",
+  "ACTION": "action",
+  "ACTIVE": "active",
+  "CONFIRMATION": "Confirmation",
+  "CONTACT": "contact",
+  "CREATION_DATE": "Creation date",
+  "DATA_IS_LOADING": "loading data…",
+  "DAY": "day | days",
+  "DESCRIPTION": "Description",
+  "DISABLED": "disabled",
+  "DISPLAYED": "Displayed",
+  "DOCUMENTATION": "documentation",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "Do not show this message again",
+  "EDITED": "edited",
+  "ENABLED": "enabled",
+  "FILES": "Files",
+  "HERE": "here",
+  "HIDDEN": "Hidden",
+  "HIDE": "Hide",
+  "HOME": "Home",
+  "HOURS": "hour|hours",
+  "INACTIVE": "inactive",
+  "LABEL": "label",
+  "LAST_UPDATE": "Last update",
+  "LAST_UPDATED_ON": "Last updated on",
+  "LOADING": "loading…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Markdown syntax can be used.",
+  "MINUTES": "minute|minutes",
+  "NEXT": "next",
+  "NO": "No",
+  "NO_DESCRIPTION": "No description",
+  "NO_NOTES": "No notes",
+  "PHOTOS": "photos",
+  "PREVIOUS": "previous",
+  "REPORT_PLACEHOLDER": "specify the reason for reporting",
+  "REPORT_SUBMITTED": "Report submitted.",
+  "SCROLL_DOWN": "Scroll down",
+  "SCROLL_UP": "Scroll up",
+  "SECONDS": "second|seconds",
+  "SEE_REPORT": "See report {0}.",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "ascending",
+      "DESC": "descending",
+      "LABEL": "sort"
+    },
+    "ORDER_BY": {
+      "LABEL": "order by"
+    },
+    "PER_PAGE": {
+      "LABEL": "per page"
+    }
+  },
+  "TILE_PROVIDERS": "Tile provider | Tile providers",
+  "TOTAL": "total",
+  "TOTAL_DURATION_WITH_PAUSES": "total duration with pauses",
+  "TYPE": "type",
+  "YES": "Yes"
+}

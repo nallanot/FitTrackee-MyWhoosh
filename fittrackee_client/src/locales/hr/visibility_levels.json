@@ -1,0 +1,20 @@
+{
+  "ANALYSIS_VISIBILITY": "vidljivost analize",
+  "CALORIES_VISIBILITY": "vidljivost kalorija",
+  "COMMENT_LEVELS": {
+    "followers_only": "samo pratitelji",
+    "private": "privatno (samo spomenuti korisnici)",
+    "public": "javno (svi)"
+  },
+  "HR_VISIBILITY": "vidljivost otkucaja srca",
+  "LEVELS": {
+    "followers_only": "samo pratitelji",
+    "private": "privatno (samo ja)",
+    "public": "javno (svi)"
+  },
+  "MAP_VISIBILITY": "vidljivost karte",
+  "MEDIA_VISIBILITY": "vidljivost medija",
+  "VISIBILITY": "vidljivost",
+  "WORKOUTS_VISIBILITY": "Vidljivost podataka povezanih s aktivnostima",
+  "WORKOUT_VISIBILITY": "vidljivost aktivnosti"
+}

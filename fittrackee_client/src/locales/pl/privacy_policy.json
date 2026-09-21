@@ -1,0 +1,37 @@
+{
+  "CONTENT": {
+    "ACCOUNT_DELETION": {
+      "CONTENT": "Możesz złożyć wniosek usunięcia konta w każdej chwili poprzez wejście na ten adres (po zalogowaniu) i kliknięcie \"Usuń moje konto\" na ekranie edycji konta.",
+      "TITLE": "Usuwanie konta"
+    },
+    "CHANGES_TO_OUR_PRIVACY_POLICY": {
+      "CONTENT": "Jeśli zdecydujemy się zmienić naszą politykę prywatności, umieścimy zmiany na tej stronie.\nTen dokument jest na licencji [CC-BY-SA](https://creativecommons.org/licenses/by-sa/4.0/). Oryginalnie zaczerpnięty z polityki prywatności [Discourse](https://github.com/discourse/discourse).",
+      "TITLE": "Zmiany w naszej polityce prywatności"
+    },
+    "DATA_COLLECTED": {
+      "CONTENT": "Następujące dane są zbierane:\n- Informacje o koncie (nazwa użytkownika, adres e-mail, hasło). Dobrowolnie podane dane konta jak imię, nazwisko, data urodzenia, lokalizacja, informacje o sobie, czy zdjęcie profilowe.\n- Pliki [GPX](https://pl.wikipedia.org/wiki/GPX). Te pliki zawierają dane związane z Twoimi aktywnościami (koordynaty geograficzne, daty, pokonane dystanse, ich czasy trwania, prędkości, wysokości miejsc, tytuł, opis, tętno…). Jeśli nie chcesz przekazywać części z tych danych, usuń je z plików GPX przed ich wysłaniem, albo dodawaj treningi bez plików GPX.\n- Dane o treningach (jaki sport, tytuł, opis, daty, czasy trwania, pokonane dystanse, wzniesienia, spadki, dodane notatki).\n- Obserwowani i obserwujący użytkownicy.\n- Komentarze i polubienia.\n- Informacje techniczne (użyta przeglądarka internetowa i system operacyjny).",
+      "TITLE": "Jakie informacje zbieramy?"
+    },
+    "INFORMATION_DISCLOSURE": {
+      "CONTENT": "Nie sprzedajemy, nie handlujemy, ani w żaden sposób nie przekazujemy na zewnątrz twoich prywatnych danych, które by pozwoliły na twoją identyfikację.\nTo nie dotyczy zaufanych partnerów, którzy pomagają nam utrzymywać ten serwis i oferować ci usługi, o ile zgodzili się oni utrzymywać te informacje w tajemnicy.\nMożemy też udostępnić twoje dane kiedy uznamy, że jest to stosowne, aby być zgodnym z prawem. Możemy to też zrobić w celu wymuszenia polityki naszej strony lub by chronić nasze/czyjeś prawa, własność lub bezpieczeństwo.\nJeśli zezwolisz zewnętrznej aplikacji, aby używała twojego konta, to zależnie od zakresu uprawnień, na jaki zezwolisz, może ona uzyskać dostęp do informacji z twojego profilu lub do twoich treningów. Aplikacje nigdy nie mają dostępu do twojego hasła.",
+      "TITLE": "Czy udostępniamy jakieś informacje zewnętrznym instytucjom?"
+    },
+    "INFORMATION_PROTECTION": {
+      "CONTENT": "Stosujemy zestaw środków bezpieczeństwa aby zachować bezpieczeństwo twoich prywatnych danych, kiedy je podajesz, wysyłasz lub pobierasz.",
+      "TITLE": "Jak chronimy twoje dane?"
+    },
+    "INFORMATION_USAGE": {
+      "CONTENT": "Dane, które zbieramy od ciebie mogą zostać użyte by dostarczyć ci kluczowych funkcjonalności **FitTrackee**:\n- Pliki GPX są używane by tworzyć treningi, wyświetlać trasy na mapie (za pomocą [OpenStreetMap](https://www.openstreetmap.org) i skonfigurowanego serwera kafelków z graficzną reprezentacją mapy), wyświetlać wykresy, generować miniatury map, obliczać rekordy i pobierać dane pogodowe (jeśli skonfigurowano dostawcę danych pogodowych).\n- Zależnie od ustawień widoczności treningów i komentarzy (publiczne, tylko dla obserwowanych, prywatne i wspomnieni użytkownicy), inni użytkownicy mogą je widzieć i wchodzić z nimi w interakcje. **Pamiętaj, że moderatorzy, administratorzy aplikacji oraz serwera mają dostęp do całej zawartości, wliczając to prywatne treningi i wiadomości**\nMożesz obserwować innych użytkowników by obserwować ich treningu na swojej osi czasu. Interakcje wymagają bycia zalogowanym.\n- Publicznie dostępne informacje z profilu to jedynie: nazwa użytkownika, rola, data rejestracji, liczba śledzących i śledzonych użytkowników, zawieszenie (jeśli dotyczy) oraz liczba treningów.\n- Adres e-mail, który podajesz, może być użyty do wysyłania ci informacji lub potwierdzenia zmian na koncie.",
+      "TITLE": "Do czego używamy twoich danych?"
+    },
+    "SITE_USAGE_BY_CHILDREN": {
+      "CONTENT": "Jeśli ten serwer znajduje się w Unii Europejskiej lub Europejskim Obszarze Gospodarczym: Nasza strona i usługi są przeznaczone dla ludzi w wieku co najmniej 16 lat. Jeśli jesteś poniżej tego wieku, to według wymagań [GDPR](https://pl.wikipedia.org/wiki/Og%C3%B3lne_rozporz%C4%85dzenie_o_ochronie_danych) (Ogólne rozporządzenie o ochronie danych) nie używaj tej strony.\nJeśli ten serwer znajduje się w USA: Nasza strona, produkty i usługi są skierowane do ludzi w wieku co najmniej 13 lat. Jeśli jesteś poniżej tego wieku, to według wymagań [COPPA](https://pl.wikipedia.org/wiki/Children%E2%80%99s_Online_Privacy_Protection_Act) (Children's Online Privacy Protection Act) nie używaj tej strony.\nWymagania prawne mogę być inne, jeśli ten serwer znajduje się w innej jurysdykcji.",
+      "TITLE": "Używanie strony przez dzieci"
+    },
+    "YOUR_CONSENT": {
+      "CONTENT": "Poprzez używanie tej strony, wyrażasz zgodę na naszą politykę prywatności.",
+      "TITLE": "Twoja zgoda"
+    }
+  },
+  "TITLE": "polityka prywatności"
+}

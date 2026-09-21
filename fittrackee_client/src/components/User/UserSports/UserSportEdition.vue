@@ -1,0 +1,408 @@
+<template>
+  <div id="sport-edition" v-if="sport">
+    <form
+      :class="{ errors: formErrors }"
+      @submit.prevent="updateSportPreferences"
+    >
+      <div class="form-items">
+        <div class="form-item">
+          <label for="sport-label" class="capitalize">
+            {{ $t('workouts.SPORT', 1) }}
+          </label>
+          {{ sport.translatedLabel }}
+        </div>
+        <div class="form-item">
+          <label for="sport-color" class="capitalize">
+            {{ $t('user.PROFILE.SPORT.COLOR') }}
+          </label>
+          <input
+            id="sport-color"
+            name="sport-color"
+            class="sport-color"
+            type="color"
+            required
+            v-model="sportPayload.color"
+            :disabled="authUserLoading"
+            @invalid="invalidateForm"
+          />
+        </div>
+        <div class="form-item">
+          <label for="sport-threshold" class="capitalize">
+            {{ $t('user.PROFILE.SPORT.STOPPED_SPEED_THRESHOLD') }}
+            ({{ `${authUser.imperial_units ? 'mi' : 'km'}/h` }})*
+          </label>
+          <input
+            id="sport-threshold"
+            name="sport-threshold"
+            class="threshold-input"
+            type="number"
+            min="0"
+            step="0.1"
+            required
+            v-model="sportPayload.stopped_speed_threshold"
+            :disabled="authUserLoading"
+            @invalid="invalidateForm"
+          />
+        </div>
+        <template v-if="sportsWithPace.includes(sport.label)">
+          <div class="form-item">
+            <label for="sport-pace-speed-display" class="capitalize">
+              {{ $t('user.PROFILE.SPORT.PACE_SPEED_DISPLAY.LABEL') }}
+            </label>
+            <select
+              id="sport-pace-speed-display"
+              name="sport-pace-speed-display"
+              v-model="sportPayload.pace_speed_display"
+            >
+              <option
+                v-for="item in paceSpeedDisplayValues"
+                :value="item"
+                :key="item"
+              >
+                {{ $t(`user.PROFILE.SPORT.PACE_SPEED_DISPLAY.${item}`) }}
+              </option>
+            </select>
+          </div>
+        </template>
+        <div class="form-item-checkbox">
+          <label for="equipment-active">
+            {{ capitalize($t('common.ACTIVE')) }}
+          </label>
+          <input
+            id="equipment-active"
+            name="equipment-active"
+            type="checkbox"
+            :checked="sport.is_active_for_user"
+            @change="updateIsActive"
+            :disabled="authUserLoading"
+          />
+        </div>
+        <label class="form-items">
+          <span>
+            {{ $t('visibility_levels.WORKOUTS_VISIBILITY') }}
+          </span>
+          <select
+            id="workouts_visibility"
+            v-model="sportPayload.workouts_visibility"
+            :disabled="authUserLoading"
+            @change="updateAnalysisMapAndMediaVisibility"
+          >
+            <option
+              v-for="level in visibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.MEDIA_VISIBILITY') }}
+          </span>
+          <select
+            id="media_visibility"
+            v-model="sportPayload.media_visibility"
+            :disabled="authUserLoading"
+            @change="updateMediaVisibility"
+          >
+            <option
+              v-for="level in mediaVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.ANALYSIS_VISIBILITY') }}
+          </span>
+          <select
+            id="analysis_visibility"
+            v-model="sportPayload.analysis_visibility"
+            :disabled="authUserLoading"
+            @change="updateMapVisibility"
+          >
+            <option
+              v-for="level in analysisVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <label class="form-items">
+          <span class="capitalize">
+            {{ $t('visibility_levels.MAP_VISIBILITY') }}
+          </span>
+          <select
+            id="map_visibility"
+            v-model="sportPayload.map_visibility"
+            :disabled="authUserLoading"
+          >
+            <option
+              v-for="level in mapVisibilityLevels"
+              :value="level"
+              :key="level"
+            >
+              {{ capitalize($t(`visibility_levels.LEVELS.${level}`)) }}
+            </option>
+          </select>
+        </label>
+        <div class="form-item">
+          <label for="sport-default-equipment">
+            {{ $t('user.PROFILE.SPORT.DEFAULT_EQUIPMENTS', 1) }}
+          </label>
+          <EquipmentMultiSelect
+            :equipment-list="equipmentsForSelect"
+            :disabled="authUserLoading"
+            :name="'sport-default-equipment'"
+            :existing-equipment-list="defaultEquipmentList"
+            @updatedValues="updateSelectedEquipmentPieces"
+          />
+        </div>
+      </div>
+      <ErrorMessage
+        v-if="errorMessages"
+        :message="errorMessages"
+        :no-margin="true"
+      />
+      <div class="form-buttons">
+        <button class="confirm" type="submit" :disabled="authUserLoading">
+          {{ $t('buttons.SUBMIT') }}
+        </button>
+        <button
+          class="cancel"
+          @click.prevent="() => $router.push(`/profile/sports/${sport?.id}`)"
+          :disabled="authUserLoading"
+        >
+          {{ $t('buttons.CANCEL') }}
+        </button>
+      </div>
+    </form>
+  </div>
+</template>
+
+<script setup lang="ts">
+  import { capitalize, computed, onMounted, ref, toRefs, watch } from 'vue'
+  import type { ComputedRef, Ref } from 'vue'
+  import { useI18n } from 'vue-i18n'
+  import { useRoute } from 'vue-router'
+
+  import EquipmentMultiSelect from '@/components/User/UserEquipments/EquipmentMultiSelect.vue'
+  import useApp from '@/composables/useApp'
+  import useAuthUser from '@/composables/useAuthUser'
+  import useSports from '@/composables/useSports'
+  import { EQUIPMENTS_STORE } from '@/store/constants'
+  import type {
+    IEquipment,
+    IEquipmentMultiselectItemsGroup,
+  } from '@/types/equipments'
+  import type {
+    ISport,
+    ITranslatedSport,
+    TPaceSpeedDisplay,
+  } from '@/types/sports'
+  import type { IAuthUserProfile, TVisibilityLevels } from '@/types/user'
+  import { useStore } from '@/use/useStore'
+  import { getEquipments } from '@/utils/equipments'
+  import { sportsWithPace } from '@/utils/sports.ts'
+  import { convertDistance } from '@/utils/units'
+  import {
+    getAllVisibilityLevels,
+    getUpdatedVisibility,
+    getVisibilityLevels,
+  } from '@/utils/visibility_levels.ts'
+
+  interface Props {
+    authUser: IAuthUserProfile
+    translatedSports: ITranslatedSport[]
+  }
+  const props = defineProps<Props>()
+  const { authUser, translatedSports } = toRefs(props)
+
+  const { t } = useI18n()
+  const store = useStore()
+  const route = useRoute()
+
+  const { errorMessages } = useApp()
+  const {
+    defaultColor,
+    defaultEquipmentList,
+    sportColors,
+    sportPayload,
+    updateIsActive,
+    updateSport,
+  } = useSports()
+  const { authUserLoading } = useAuthUser()
+
+  const paceSpeedDisplayValues: TPaceSpeedDisplay[] = [
+    'pace',
+    'speed',
+    'pace_and_speed',
+  ]
+
+  const formErrors: Ref<boolean> = ref(false)
+
+  const sport: ComputedRef<ITranslatedSport | null> = computed(() =>
+    getSport(translatedSports.value)
+  )
+  const equipments: ComputedRef<IEquipment[]> = computed(
+    () => store.getters[EQUIPMENTS_STORE.GETTERS.EQUIPMENTS]
+  )
+  const equipmentsForSelect: ComputedRef<IEquipmentMultiselectItemsGroup[]> =
+    computed(() =>
+      equipments.value && sport.value
+        ? getEquipments(
+            equipments.value,
+            t,
+            'withIncludedIds',
+            sport.value,
+            sport.value.default_equipments.map((e) => e.id)
+          )
+        : []
+    )
+  const visibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getAllVisibilityLevels()
+  )
+  const analysisVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(
+    () => getVisibilityLevels(sportPayload.workouts_visibility)
+  )
+  const mapVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getVisibilityLevels(sportPayload.analysis_visibility)
+  )
+  const mediaVisibilityLevels: ComputedRef<TVisibilityLevels[]> = computed(() =>
+    getVisibilityLevels(sportPayload.workouts_visibility)
+  )
+
+  function getSport(sportsList: ITranslatedSport[]) {
+    if (!route.params.id) {
+      return null
+    }
+    const filteredSportList = sportsList.filter((sport) =>
+      route.params.id ? sport.id === +route.params.id : null
+    )
+    if (filteredSportList.length === 0) {
+      return null
+    }
+    return filteredSportList[0]
+  }
+  function formatSportForm(sport: ISport | null) {
+    if (sport !== null) {
+      sportPayload.sport_id = sport.id
+      sportPayload.color = sport.color
+        ? sport.color
+        : sportColors
+          ? sportColors[sport.label]
+          : defaultColor
+      sportPayload.is_active = sport.is_active_for_user
+      sportPayload.stopped_speed_threshold = +`${
+        authUser.value.imperial_units
+          ? convertDistance(sport.stopped_speed_threshold, 'km', 'mi', 2)
+          : parseFloat(sport.stopped_speed_threshold.toFixed(2))
+      }`
+      sportPayload.pace_speed_display = sport.pace_speed_display
+      sportPayload.fromSport = true
+      defaultEquipmentList.value = sport.default_equipments
+      sportPayload.workouts_visibility =
+        sport.workouts_visibility || authUser.value.workouts_visibility
+      sportPayload.media_visibility =
+        sport.media_visibility || authUser.value.media_visibility
+      sportPayload.analysis_visibility =
+        sport.analysis_visibility || authUser.value.analysis_visibility
+      sportPayload.map_visibility =
+        sport.map_visibility || authUser.value.map_visibility
+    }
+  }
+  function updateSelectedEquipmentPieces(selectedIds: string[]) {
+    sportPayload.default_equipment_ids = selectedIds
+  }
+  function updateSportPreferences() {
+    updateSport(authUser.value)
+  }
+  function invalidateForm() {
+    formErrors.value = true
+  }
+  function updateAnalysisMapAndMediaVisibility() {
+    sportPayload.analysis_visibility = getUpdatedVisibility(
+      sportPayload.analysis_visibility,
+      sportPayload.workouts_visibility
+    )
+    updateMapVisibility()
+    updateMediaVisibility()
+  }
+  function updateMapVisibility() {
+    sportPayload.map_visibility = getUpdatedVisibility(
+      sportPayload.map_visibility,
+      sportPayload.analysis_visibility
+    )
+  }
+  function updateMediaVisibility() {
+    sportPayload.media_visibility = getUpdatedVisibility(
+      sportPayload.media_visibility,
+      sportPayload.workouts_visibility
+    )
+  }
+
+  watch(
+    () => sport.value,
+    (sport) => {
+      if (route.params.id && sport?.id) {
+        formatSportForm(sport)
+      }
+    }
+  )
+
+  onMounted(() => {
+    const labelInput = document.getElementById('sport-color')
+    labelInput?.focus()
+    if (!route.params.id) {
+      return
+    }
+    if (route.params.id && sport.value?.id) {
+      formatSportForm(sport.value)
+    }
+  })
+</script>
+
+<style scoped lang="scss">
+  @use '~@/scss/vars.scss' as *;
+
+  #sport-edition {
+    .form-items {
+      display: flex;
+      flex-direction: column;
+
+      input[type='text'] {
+        height: 20px;
+      }
+      .form-item {
+        display: flex;
+        flex-direction: column;
+        padding: $default-padding 0;
+      }
+      .form-item-checkbox {
+        display: flex;
+        padding: $default-padding $default-padding $default-padding 0;
+        gap: $default-padding * 0.5;
+      }
+      .sport-color {
+        border: none;
+        margin: 6px 1px 6px 0;
+        padding: 0;
+        width: 80px;
+      }
+    }
+
+    .form-buttons {
+      display: flex;
+      justify-content: flex-end;
+      button {
+        margin: $default-padding * 0.5;
+      }
+    }
+  }
+</style>

@@ -1,0 +1,59 @@
+{
+  "ABOUT": "over",
+  "ACTION": "Actie",
+  "ACTIVE": "Actief",
+  "CONFIRMATION": "Bevestiging",
+  "CONTACT": "contacteer",
+  "CREATION_DATE": "Aanmaakdatum",
+  "DATA_IS_LOADING": "gegevens laden…",
+  "DAY": "dag | dagen",
+  "DESCRIPTION": "Beschrijving",
+  "DISABLED": "uitgeschakeld",
+  "DISPLAYED": "Weergegeven",
+  "DOCUMENTATION": "documentatie",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "Laat dit bericht niet meer zien",
+  "EDITED": "bewerkt",
+  "ENABLED": "ingeschakeld",
+  "FILES": "Bestanden",
+  "HERE": "hier",
+  "HIDDEN": "Verborgen",
+  "HIDE": "Verberg",
+  "HOME": "Startscherm",
+  "HOURS": "uur|uren",
+  "INACTIVE": "inactief",
+  "LABEL": "label",
+  "LAST_UPDATE": "Laatste aanpassing",
+  "LAST_UPDATED_ON": "Laatste wijziging op",
+  "LOADING": "laden…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Markdown opmaak kan gebruikt worden.",
+  "MINUTES": "minuut|minuten",
+  "NEXT": "volgende",
+  "NO": "Nee",
+  "NO_DESCRIPTION": "Geen beschrijving",
+  "NO_NOTES": "Geen notities",
+  "PHOTOS": "foto's",
+  "PREVIOUS": "vorige",
+  "REPORT_PLACEHOLDER": "Geef een reden voor de melding",
+  "REPORT_SUBMITTED": "Melding aangemaakt.",
+  "SCROLL_DOWN": "Scroll naar beneden",
+  "SCROLL_UP": "Scroll naar boven",
+  "SECONDS": "seconde|secondes",
+  "SEE_REPORT": "Bekijk melding {0}.",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "oplopend",
+      "DESC": "aflopend",
+      "LABEL": "sorteer"
+    },
+    "ORDER_BY": {
+      "LABEL": "sorteer op"
+    },
+    "PER_PAGE": {
+      "LABEL": "per pagina"
+    }
+  },
+  "TOTAL": "totaal",
+  "TOTAL_DURATION_WITH_PAUSES": "totale duur inclusief pauzes",
+  "TYPE": "type",
+  "YES": "Ja"
+}

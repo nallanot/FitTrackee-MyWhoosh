@@ -1,0 +1,40 @@
+{
+  "ABOUT": "o aplikaci",
+  "ACTION": "akce",
+  "ACTIVE": "aktivní",
+  "CONFIRMATION": "Potvrzení",
+  "CONTACT": "kontakt",
+  "DAY": "den | dny",
+  "DESCRIPTION": "Popis",
+  "DISPLAYED": "Zobrazeno",
+  "DOCUMENTATION": "dokumentace",
+  "HIDDEN": "Skryto",
+  "HOME": "Domů",
+  "HOURS": "hodina|hodiny",
+  "INACTIVE": "neaktivní",
+  "LABEL": "popisek",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Lze použít Markdown syntaxi.",
+  "MINUTES": "minuta|minuty",
+  "NEXT": "další",
+  "NO": "Ne",
+  "NO_DESCRIPTION": "Bez popisu",
+  "NO_NOTES": "Žádné poznámky",
+  "PREVIOUS": "předchozí",
+  "SECONDS": "sekunda|sekundy",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "vzsestupně",
+      "DESC": "sestupně",
+      "LABEL": "seřadit"
+    },
+    "ORDER_BY": {
+      "LABEL": "řazení podle"
+    },
+    "PER_PAGE": {
+      "LABEL": "na stránku"
+    }
+  },
+  "TOTAL": "celkem",
+  "TOTAL_DURATION_WITH_PAUSES": "Celková doba včetně přestávek",
+  "YES": "Ano"
+}

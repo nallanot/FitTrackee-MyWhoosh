@@ -1,0 +1,89 @@
+{
+  "Canoeing": {
+    "LABEL": "Kanadyjkarstwo"
+  },
+  "Canoeing (Whitewater)": {
+    "LABEL": "Kajakarstwo (górskie)"
+  },
+  "Cycling (Sport)": {
+    "LABEL": "Kolarstwo (Sport)"
+  },
+  "Cycling (Transport)": {
+    "LABEL": "Kolarstwo (Transport)"
+  },
+  "Cycling (Trekking)": {
+    "LABEL": "Kolarstwo (Trekking)"
+  },
+  "Cycling (Virtual)": {
+    "LABEL": "Kolarstwo (Wirtualne)"
+  },
+  "Halfbike": {
+    "LABEL": "Półrower"
+  },
+  "Hiking": {
+    "LABEL": "Piesza wycieczka"
+  },
+  "Ice Skating": {
+    "LABEL": "Łyżwiarstwo"
+  },
+  "Inline Skating": {
+    "LABEL": "Jazda na rolkach"
+  },
+  "Kayaking": {
+    "LABEL": "Kajakarstwo"
+  },
+  "Kayaking (Whitewater)": {
+    "LABEL": "Kajakarstwo (górskie)"
+  },
+  "Mountain Biking": {
+    "LABEL": "Kolarstwo górskie"
+  },
+  "Mountain Biking (Electric)": {
+    "LABEL": "Kolarstwo górskie (Elektryczne)"
+  },
+  "Mountaineering": {
+    "LABEL": "Alpinizm"
+  },
+  "Open Water Swimming": {
+    "LABEL": "Pływanie na wodach otwartych"
+  },
+  "Padel (Outdoor)": {
+    "LABEL": "Padel (na zewnątrz)"
+  },
+  "Paragliding": {
+    "LABEL": "Paralotniarstwo"
+  },
+  "Rowing": {
+    "LABEL": "Wioślarstwo"
+  },
+  "Running": {
+    "LABEL": "Bieg"
+  },
+  "Skiing (Alpine)": {
+    "LABEL": "Narciarstwo alpejskie"
+  },
+  "Skiing (Cross Country)": {
+    "LABEL": "Narciarstwo biegowe"
+  },
+  "Snowshoes": {
+    "LABEL": "Rakiety śnieżne"
+  },
+  "Standup Paddleboarding": {
+    "LABEL": "Pływanie na desce z wiosłem"
+  },
+  "Swimrun": {
+    "LABEL": "Swimrun"
+  },
+  "Tennis (Outdoor)": {
+    "LABEL": "Tenis"
+  },
+  "Trail": {
+    "LABEL": "Szlak"
+  },
+  "Walking": {
+    "LABEL": "Chód"
+  },
+  "Windsurfing": {
+    "LABEL": "Windsurfing"
+  }
+}

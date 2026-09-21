@@ -1,0 +1,18 @@
+{
+  "ANALYSIS_VISIBILITY": "widoczność analizy",
+  "COMMENT_LEVELS": {
+    "followers_only": "tylko śledzący",
+    "private": "prywatne (tylko oznaczeni użytkownicy)",
+    "public": "publiczne (każdy)"
+  },
+  "HR_VISIBILITY": "widoczność tętna",
+  "LEVELS": {
+    "followers_only": "tylko śledzący",
+    "private": "prywatne (tylko ja)",
+    "public": "publiczne (każdy)"
+  },
+  "MAP_VISIBILITY": "widoczność mapy",
+  "VISIBILITY": "Widoczność",
+  "WORKOUTS_VISIBILITY": "Widoczność danych związanych z treningiem",
+  "WORKOUT_VISIBILITY": "widoczność treningu"
+}

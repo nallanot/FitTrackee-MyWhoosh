@@ -1,0 +1,275 @@
+<template>
+  <div id="user-preferences" class="description-list">
+    <div class="preferences-section">{{ $t('user.PROFILE.INTERFACE') }}</div>
+    <dl>
+      <dt>{{ $t('user.PROFILE.LANGUAGE') }}:</dt>
+      <dd>{{ userLanguage }}</dd>
+      <dt>{{ $t('user.PROFILE.THEME_MODE.LABEL') }}:</dt>
+      <dd>{{ $t(`user.PROFILE.THEME_MODE.VALUES.${darkMode}`) }}</dd>
+      <dt>{{ $t('user.PROFILE.TIMEZONE') }}:</dt>
+      <dd>{{ timezone }}</dd>
+      <dt>{{ $t('user.PROFILE.DATE_FORMAT') }}:</dt>
+      <dd>{{ dateFormat }}</dd>
+      <dt>{{ $t('user.PROFILE.FIRST_DAY_OF_WEEK') }}:</dt>
+      <dd>{{ $t(`user.PROFILE.${fistDayOfWeek}`) }}</dd>
+    </dl>
+    <div class="preferences-section">{{ $t('user.PROFILE.TABS.ACCOUNT') }}</div>
+    <dl>
+      <dt>{{ $t('user.PROFILE.FOLLOW_REQUESTS_APPROVAL.LABEL') }}:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.FOLLOW_REQUESTS_APPROVAL.${
+              user.manually_approves_followers ? 'MANUALLY' : 'AUTOMATICALLY'
+            }`
+          )
+        }}
+      </dd>
+      <dt>{{ $t('user.PROFILE.PROFILE_IN_USERS_DIRECTORY.LABEL') }}:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.PROFILE_IN_USERS_DIRECTORY.${
+              user.hide_profile_in_users_directory ? 'HIDDEN' : 'DISPLAYED'
+            }`
+          )
+        }}
+      </dd>
+    </dl>
+    <div class="preferences-section">{{ $t('workouts.WORKOUT', 0) }}</div>
+    <dl>
+      <dt>{{ $t('common.TILE_PROVIDERS') }}<sup>1</sup>:</dt>
+      <dd>
+        {{ tileProvider?.name }}
+      </dd>
+      <dt>{{ $t('user.PROFILE.UNITS.LABEL') }}:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.UNITS.${user.imperial_units ? 'IMPERIAL' : 'METRIC'}`
+          )
+        }}
+      </dd>
+      <dt>{{ $t('user.PROFILE.ASCENT_DATA') }}:</dt>
+      <dd>{{ $t(`common.${displayAscent}`) }}</dd>
+      <dt>{{ $t('user.PROFILE.WORKOUT_CHARTS_DISPLAY.LABEL') }}:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.WORKOUT_CHARTS_DISPLAY.${
+              user.split_workout_charts ? 'MULTIPLE' : 'ONE'
+            }`
+          )
+        }}
+      </dd>
+      <dt>{{ $t('user.PROFILE.ELEVATION_CHART_START.LABEL') }}:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.ELEVATION_CHART_START.${
+              user.start_elevation_at_zero ? 'ZERO' : 'MIN_ALT'
+            }`
+          )
+        }}
+      </dd>
+      <dt>
+        {{ $t('user.PROFILE.WORKOUT_STATS_FROM_FILE.LABEL') }}<sup>1</sup>:
+      </dt>
+      <dd>
+        {{ $t(`user.PROFILE.WORKOUT_STATS_FROM_FILE.${workoutStatsFromFile}`) }}
+      </dd>
+      <div class="info-box stats-from-file-help">
+        <span>
+          <i class="fa fa-info-circle" aria-hidden="true" />
+          {{ $t('user.PROFILE.WORKOUT_STATS_FROM_FILE.HELP') }}
+        </span>
+      </div>
+      <dt>{{ $t('user.PROFILE.USE_RAW_GPX_SPEED.LABEL') }}<sup>1</sup>:</dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.USE_RAW_GPX_SPEED.${
+              user.use_raw_gpx_speed ? 'RAW_SPEED' : 'FILTERED_SPEED'
+            }`
+          )
+        }}
+      </dd>
+      <div class="info-box raw-speed-help">
+        <span>
+          <i class="fa fa-info-circle" aria-hidden="true" />
+          {{ $t('user.PROFILE.USE_RAW_GPX_SPEED.HELP') }}
+        </span>
+      </div>
+    </dl>
+    <dl>
+      <dt>
+        {{ $t('user.PROFILE.ELEVATIONS_DATA_SOURCE_LABEL') }}<sup>2</sup>:
+      </dt>
+      <dd class="capitalize">
+        {{ $t(`workouts.ELEVATION_DATA_SOURCE.${user.elevation_data_source}`) }}
+      </dd>
+      <div
+        v-if="elevationServices.length === 0"
+        class="info-box missing-elevations-help"
+      >
+        <span>
+          <i class="fa fa-info-circle" aria-hidden="true" />
+          {{ $t('user.PROFILE.NO_ELEVATION_SERVICE_AVAILABLE') }}
+        </span>
+      </div>
+      <dt>{{ $t('user.PROFILE.ELEVATIONS_PROCESSING.LABEL') }}<sup>2</sup>:</dt>
+      <dd>
+        {{
+          $t(`user.PROFILE.ELEVATIONS_PROCESSING.${user.elevation_processing}`)
+        }}
+      </dd>
+      <dt>
+        {{ $t('user.PROFILE.PROCESS_ONLY_MISSING_ELEVATIONS') }}<sup>2</sup>:
+      </dt>
+      <dd>
+        {{
+          $t(`common.${user.process_only_missing_elevations ? 'YES' : 'NO'}`)
+        }}
+      </dd>
+      <dt>{{ $t('visibility_levels.WORKOUTS_VISIBILITY') }}<sup>3</sup>:</dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.workouts_visibility}`) }}
+      </dd>
+      <dt class="capitalize">
+        {{ $t('visibility_levels.MEDIA_VISIBILITY') }}<sup>3</sup>:
+      </dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.media_visibility}`) }}
+      </dd>
+      <dt class="capitalize">
+        {{ $t('visibility_levels.ANALYSIS_VISIBILITY') }}<sup>3</sup>:
+      </dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.analysis_visibility}`) }}
+      </dd>
+      <dt class="capitalize">
+        {{ $t('visibility_levels.MAP_VISIBILITY') }}<sup>3</sup>:
+      </dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.map_visibility}`) }}
+      </dd>
+      <dt class="capitalize">{{ $t('visibility_levels.HR_VISIBILITY') }}:</dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.hr_visibility}`) }}
+      </dd>
+      <dt class="capitalize">
+        {{ $t('visibility_levels.CALORIES_VISIBILITY') }}:
+      </dt>
+      <dd class="capitalize">
+        {{ $t(`visibility_levels.LEVELS.${user.calories_visibility}`) }}
+      </dd>
+      <dt>
+        {{ $t('user.PROFILE.SEGMENTS_CREATION_EVENT.LABEL') }}<sup>1</sup>:
+      </dt>
+      <dd>
+        {{
+          $t(
+            `user.PROFILE.SEGMENTS_CREATION_EVENT.${user.segments_creation_event}`
+          )
+        }}
+      </dd>
+      <div class="info-box events-help">
+        <span>
+          <i class="fa fa-info-circle" aria-hidden="true" />
+          {{ $t('user.PROFILE.SEGMENTS_CREATION_EVENT.HELP') }}
+        </span>
+      </div>
+    </dl>
+    <div class="info-box changes-help">
+      <div>
+        1. {{ $t('user.PROFILE.CHANGES_ONLY_TO_NEW_OR_REFRESHED_WORKOUTS') }}
+      </div>
+      <div>
+        2. {{ $t('user.PROFILE.CHANGES_CAN_BE_APPLIED_WHEN_REFRESH_WITH_CLI') }}
+      </div>
+      <div>
+        3. {{ $t('user.PROFILE.CHANGES_ONLY_TO_NEW_WORKOUTS') }}{{ ' ' }}
+        {{
+          $t(
+            'user.PROFILE.VISIBILITY_LEVELS_CAN_BE_OVERRIDEN_BY_SPORT_PREFERENCES'
+          )
+        }}
+      </div>
+    </div>
+    <div class="profile-buttons">
+      <button @click="$router.push('/profile/edit/preferences')">
+        {{ $t('user.PROFILE.EDIT_PREFERENCES') }}
+      </button>
+      <button @click="$router.push('/')">{{ $t('common.HOME') }}</button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+  import { computed, toRefs } from 'vue'
+  import type { ComputedRef } from 'vue'
+
+  import useApp from '@/composables/useApp.ts'
+  import useAuthUser from '@/composables/useAuthUser'
+  import useTileProviders from '@/composables/useTileProviders.ts'
+  import type { ITileProvider } from '@/types/tileProviders.ts'
+  import type { IAuthUserProfile } from '@/types/user'
+  import { languageLabels } from '@/utils/locales'
+
+  interface Props {
+    user: IAuthUserProfile
+  }
+  const props = defineProps<Props>()
+  const { user } = toRefs(props)
+
+  const { elevationServices } = useApp()
+  const { dateFormat, timezone } = useAuthUser()
+  const { availableTileProviders } = useTileProviders()
+
+  const userLanguage: ComputedRef<string> = computed(() =>
+    user.value.language && user.value.language in languageLabels
+      ? languageLabels[user.value.language]
+      : languageLabels['en']
+  )
+  const fistDayOfWeek = computed(() => (user.value.weekm ? 'MONDAY' : 'SUNDAY'))
+  const displayAscent = computed(() =>
+    user.value.display_ascent ? 'DISPLAYED' : 'HIDDEN'
+  )
+  const darkMode = computed(() =>
+    user.value.use_dark_mode === true
+      ? 'DARK'
+      : user.value.use_dark_mode === false
+        ? 'LIGHT'
+        : 'DEFAULT'
+  )
+  const workoutStatsFromFile = computed(() =>
+    user.value.workout_stats_from_file ? 'FROM_FILE' : 'CALCULATED'
+  )
+  const tileProvider: ComputedRef<ITileProvider | undefined> = computed(() =>
+    availableTileProviders.value.find((provider) => provider.default_for_user)
+  )
+</script>
+
+<style lang="scss" scoped>
+  @use '~@/scss/vars.scss' as *;
+  #user-preferences {
+    padding: $default-padding * 0.5 0 $default-padding;
+    .preferences-section {
+      font-weight: bold;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--card-border-color);
+    }
+    .stats-from-file-help,
+    .raw-speed-help,
+    .missing-elevations-help {
+      margin-top: -$default-margin * 0.5;
+    }
+    .changes-help,
+    .missing-elevations-help {
+      margin-bottom: $default-margin;
+    }
+    .stats-from-file-help {
+      white-space: break-spaces;
+    }
+  }
+</style>

@@ -1,0 +1,207 @@
+[tool.poetry]
+name = "fittrackee"
+version = "1.4.0b1"
+description = "Self-hosted outdoor workout/activity tracker"
+authors = ["SamR1"]
+license = "AGPL-3.0-only"
+readme = "README.md"
+homepage = "https://codeberg.org/FitTrackee/FitTrackee"
+documentation = "https://docs.fittrackee.org"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: Flask",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: JavaScript"
+]
+exclude = ["fittrackee/tests"]
+include = [
+    { path = "fittrackee/dist/", format = ["sdist", "wheel"] }
+]
+
+[tool.poetry.urls]
+Issues = "https://codeberg.org/FitTrackee/FitTrackee/issues"
+Changelog = "https://docs.fittrackee.org/en/changelog.html"
+"Release Notes" = "https://codeberg.org/FitTrackee/FitTrackee/releases"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+authlib = "1.7.2"
+babel = "2.18.0"
+click = "8.4.2"
+dramatiq = "2.2.0"
+dramatiq-abort = {extras = ["redis"], version = "1.2.1"}
+feedgenerator = "2.2.1"
+fitdecode = "0.11.0"
+flask = "3.1.3"
+flask-babel = "4.0.0"
+flask-bcrypt = "1.0.1"
+flask-limiter = {version = "4.1.1", extras = ["redis"]}
+flask-migrate = "4.1.0"
+flask-sqlalchemy = "3.1.1"
+geoalchemy2 = {extras = ["shapely"], version = "0.20.0"}
+geopandas = "1.1.4"
+gpxpy = "1.6.2"
+gunicorn = "26.0.0"
+humanize = "4.16.0"
+jsonschema = "4.26.0"
+lxml = "6.1.1"
+mistune = "3.3.4"
+nh3 = "0.3.6"
+numpy = "2.4.6"  # numpy 2.5+ requires python 3.12+
+pandas = "3.0.5"
+pillow = "12.3.0"
+psycopg2-binary = "2.9.12"
+pyjwt = "2.13.0"
+python-magic = "0.4.27"
+pyproj = "3.7.2"
+pyopenssl = "26.4.0"
+pytz = "2026.3.post1"
+shortuuid = "1.0.13"
+sqlalchemy = "2.0.52"
+staticmap3 = {extras = ["filecache"], version = "0.2.0"}
+ua-parser = "1.0.2"
+xmltodict = "1.0.4"
+
+[tool.poetry.group.dev.dependencies]
+codespell = "2.4.3"
+debugpy = "1.8.21"
+furo = "2025.12.19"
+mypy = "2.3.1"
+pytest = "9.1.1"
+pytest-cov = "7.1.0"
+pytest-html = "4.2.0"
+pytest-runner = "6.0.1"
+pytest-selenium = "4.1.0"
+pytest-xdist = {extras = ["psutil"], version = "3.8.0"}
+recommonmark = "0.7.1"
+ruff = "0.16.3"
+selenium = "4.47.0"
+sphinx = "9.0.4" # sphinx 9.1+ requires python 3.12+
+sphinx-copybutton = "0.5.2"
+sphinx-intl = "2.3.2"
+sphinxcontrib-httpdomain = "2.0.0"
+time-machine = "3.4.0"
+types-freezegun = "^1.1"
+types-pytz = "^2026.2"
+types-redis = "^4.6"
+types-requests = "^2.32"
+
+[tool.poetry.scripts]
+fittrackee = 'fittrackee.__main__:main'
+ftcli = 'fittrackee.cli:cli'
+
+[tool.ruff]
+line-length = 79
+exclude = ["fittrackee/migrations/*"]
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # isort
+    "I",
+    # flake8-builtins
+    "A",
+    # flake8-type-checking
+    "TC",
+    # flake8-datetimez
+    "DTZ",
+    # flake8-print
+    "T20",
+    # flake8-bugbear
+    "B",
+    # flake8-bandit
+    "S",
+    # Ruff-specific rules
+    "RUF",
+    # Pandas-vet
+    "PD",
+    # NumPy specific rules
+    "NPY",
+]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"**/tests/**/*.py" = [
+    "S101",  # Use of assert detected
+    "S105",  # Possible hardcoded password
+    "S106",  # Possible hardcoded password
+    "S108",  # Probable insecure usage of temporary file or directory
+    "S311",  # Standard pseudo-random generators are not suitable for cryptographic purposes
+]
+"e2e/**/*.py" = [
+    "S101",  # Use of assert detected
+    "S311",  # Standard pseudo-random generators are not suitable for cryptographic purposes
+]
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.per-file-ignores]
+"fittrackee/__main__.py" = ["E501"]
+"fittrackee/activities/stats.py" = ["E501"]
+"fittrackee/application/app_config.py" = ["E501"]
+"fittrackee/languages.py" = ["RUF003"]
+"fittrackee/tests/test_email.py" = ["E501"]
+"fittrackee/tests/test_email_template_password_request.py" = ["E501"]
+"fittrackee/tests/fixtures/fixtures_workouts.py" = ["E501"]
+"fittrackee/users/auth.py" = ["E501"]
+"fittrackee/workouts/workouts.py" = ["E501"]
+
+[tool.pytest.ini_options]
+markers = [
+    "disable_autouse_update_records_patch: disable records update",
+    "disable_autouse_default_weather_service: disable weather service",
+]
+
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+ignore_missing_imports = true
+# mypy per-module options
+[[tool.mypy.overrides]]
+module = "*.migrations.*"
+ignore_errors = true
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.codespell]
+# Ref: https://github.com/codespell-project/codespell#using-a-config-file
+skip = [
+    '.git*',
+    '*.svg',
+    '*.lock',
+    '*.css',
+    '*.min.*',
+    'dist',
+    './docsrc/build',
+    'fr',
+    'locales',
+    'translations',
+    '*.map',
+    'emails',
+    'searchindex.js',
+    'language_data.js',
+    '.idea',
+    '.venv',
+    '.mypy_cache',
+    '.pytest_cache',
+    'node_modules',
+    'package-lock.json'
+]
+check-hidden = true
+ignore-regex = '\b(Gard|Nome)\b'
+# Unfortunate choices for words which are not correct but too many by now
+ignore-words-list = 'equipments,informations,te'

@@ -1,0 +1,168 @@
+{
+  "ABOUT": {
+    "DESCRIPTION": "Zure erabiltzaileentzat erabilgarri izan daitekeen edozein informazioa.",
+    "TEXT": "Instantziaren informazio xehetua"
+  },
+  "ACTION": "Ekintza | Ekintzak",
+  "ACTIVATE_USER_ACCOUNT": "Aktibatu kontua",
+  "ACTIVE": "Aktibo",
+  "ADMIN": "Kudeatzailea",
+  "ADMINISTRATION": "Kudeaketa",
+  "ADMIN_RIGHTS_DELETE_USER_ACCOUNT": "Gehitu/kendu kudeatzaile baimenak, ezabatu erabiltzaile-kontua.",
+  "APPLICATION": "Aplikazioa",
+  "APP_CONFIG": {
+    "ADMIN_CONTACT": "Kontakturako kudeatzailearen eposta helbidea",
+    "ASYNCHRONOUS_UPLOAD_DISABLED": "Zip fitxategiak era asinkronoan kargatzea desaktibatuta dago.",
+    "GLOBAL_MAP_WORKOUTS_LIMIT_HELP": "Balio hau ezin da 50.000 ariketa baino handiagoa izan.",
+    "GLOBAL_MAP_WORKOUTS_LIMIT_LABEL": "Mapa globalean erakusten den ariketa kopuru maximoa",
+    "MAX_FILES_IN_ZIP_LABEL": "zip fitxategiaren gehienezko fitxategi kopurua",
+    "MAX_SYNC_FILES_IN_ZIP_LABEL": "Era sinkronoan prozesatzeko fitxategi kopuru maximoa",
+    "MAX_USERS_HELP": "0 bada, ez dago izena emateko mugarik.",
+    "MAX_USERS_LABEL": "Gehieneko erabiltzaile kopurua",
+    "NO_CONTACT_EMAIL": "ez dago kontakturako eposta helbiderik",
+    "SINGLE_UPLOAD_MAX_SIZE_LABEL": "Kargatutako fitxategien tamaina-muga (Mbtan)",
+    "STATS_WORKOUTS_LIMIT_HELP": "0 bada, ez da saio kopuruaren mugarik erabiliko.",
+    "STATS_WORKOUTS_LIMIT_LABEL": "Saio kopuru maximoa estatistikatarako",
+    "TITLE": "Aplikazioaren konfigurazioa",
+    "ZIP_UPLOAD_MAX_SIZE_LABEL": "zip fitxategiaren gehienezko tamaina (Mbtan)"
+  },
+  "APP_MODERATION": {
+    "ACTIONS": {
+      "ADD_COMMENT": "Gehitu iruzkina",
+      "MARK_AS_RESOLVED": "Markatu ebatzita",
+      "MARK_AS_UNRESOLVED": "Markatu ez-ebatzita",
+      "SEND_WARNING_EMAIL": "Bidali ohartarazpena",
+      "SUSPEND_ACCOUNT": "Bertan behera utzi erabiltzaile-kontua",
+      "SUSPEND_CONTENT": "Bertan behera utzi edukia",
+      "UNSUSPEND_ACCOUNT": "Biraktibatu erabiltzaile-kontua",
+      "UNSUSPEND_CONTENT": "Biraktibatu edukia"
+    },
+    "APPEAL": {
+      "APPROVED": "Apelazio hau onartu egin da {0}.",
+      "AUTOMATICALLY_APPROVED_BY_UNSUSPENSION": "Apelazio hau onartu egin da bertan behera uztea altxatuz.",
+      "HIDE": "Ezkutatu apelazioa",
+      "REASON_IS": "Arrazoia hau da:",
+      "REJECTED": "Apelazio hau baztertu egin da {0}.",
+      "SEE": "Ikusi apelazioa"
+    },
+    "DESCRIPTION": "Txostenen kudeaketa.",
+    "NOTES_AND_ACTIONS": "Oharrak eta akzioak",
+    "NO_REPORTS_FOUND": "Salaketarik ez",
+    "ORDER_BY": {
+      "CREATED_AT": "sorrera-data",
+      "UPDATED_AT": "eguneraketa-data"
+    },
+    "REASON": "Arrazoia",
+    "REPORT": "salaketa | salaketa",
+    "REPORTED_BY": "nork salatua",
+    "REPORTED_CONTENT": "Salatutako edukia",
+    "REPORTED_USER": "salatutako erabiltzailea",
+    "REPORTER": "salatzailea",
+    "REPORT_ACTIONS": {
+      "comment_suspension": "Iruzkin hau bertan behera utzi du {1} {2} erabiltzaileak.",
+      "comment_unsuspension": "Erantzuna bertan behera uztea altxatu egin du {1} {2} erabiltzaileak.",
+      "report_reopening": "Salaketa berriz ireki du {1} {2} erabiltzaileak.",
+      "report_resolution": "Salaketa ebatzitzat markatu du {1} {2} erabiltzaileak.",
+      "user_suspension": "{1} {2} erabiltzaileak {0} bertan behera utzi du.",
+      "user_unsuspension": "{0} erabiltzailea bertan behera uztea {1} {2} erabiltzaileak altxatu egin du.",
+      "user_warning": "{0} erabiltzaileari ohartarazpena bidali dio {1} {2} erabiltzaileak.",
+      "user_warning_lifting": "{0} erabiltzailearen ohartarazpena altxatu egin du {1} {2} erabiltzaileak.",
+      "workout_suspension": "Ariketa bertan behera utzi du {1} {2} erabiltzaileak.",
+      "workout_unsuspension": "Ariketa bertan behera uztea altxatu egin du {1} {2} erabiltzaileak."
+    },
+    "REPORT_NOTE": "Oharra",
+    "RESOLVED": {
+      "FALSE": "Ebatzi gabe",
+      "TRUE": "Ebatzita"
+    },
+    "RESOLVED_AT": "Noiz ebatzita",
+    "RESOLVED_BY": "Nork ebatzita",
+    "STATUS": "egoera",
+    "TEXTAREA_PLACEHOLDER": {
+      "ADD_COMMENT": "Gehitu iruzkina, esan egindakoa edo idatzi beste edozein informazio erabilgarri.",
+      "INFORMATION_VISIBLE_TO_USER": "Informazio hau erabiltzaileak ikusiko du.",
+      "MARK_AS_RESOLVED": "Esan ebazpenaren arrazoia.",
+      "MARK_AS_UNRESOLVED": "Esan ez-ebaztearen arrazoia.",
+      "SEND_WARNING_EMAIL": "Esan ohartarazpenaren arrazoia (ez da derrigorrezkoa).",
+      "SUSPEND": "Esan bertan behera uzteko arrazoia (ez da derrigorrezkoa).",
+      "UNSUSPEND": "Gehitu iruzkina (ez da derrigorrezkoa).",
+      "UPDATE_APPEAL": "Esan apelazio hau prozesatzeko arrazoia."
+    },
+    "TITLE": "Moderazioa",
+    "UNRESOLVED_REPORTS_EXIST": "Ebatzi gabeko salaketak daude.",
+    "USERS_QUEUED_TASKS_EXIST": "Lana dago itxaron-zerrendan",
+    "VIEW_REPORT": "Ikusi salaketa"
+  },
+  "BACK_TO_ADMIN": "Kudeaketara itzuli",
+  "CONFIRM_SUSPEND_ACCOUNT": "Ziur zaude {0} kontua bertan behera utzi nahi duzula?",
+  "CONFIRM_SUSPEND_CONTENT": "Ziur zaude salatutako edukia bertan behera utzi nahi duzula?",
+  "CONFIRM_USER_ACCOUNT_DELETION": "Ziur zaude {0} kontua ezabatu nahi duzula? Datu guztiak ezabatuko dira eta ekintza hau ezin da desegin.",
+  "CONFIRM_USER_PASSWORD_RESET": "Ziur zaude {0} pasahitza berrezarri nahi duzula?",
+  "CURRENT_EMAIL": "Uneko eposta",
+  "DELETED_COMMENT": "Ezabatutako iruzkina",
+  "DELETED_USER": "Ezabatutako erabiltzailea",
+  "DELETED_WORKOUT": "Ezabatutako ariketa",
+  "DELETE_USER": "Ezabatu erabiltzailea",
+  "EMAIL_SENDING_DISABLED": "Eposta bidalketa desaktibatuta dago.",
+  "ENABLE_DISABLE_EQUIPMENT_TYPES": "Aktibatu/Desaktibatu ekipamendu motak.",
+  "ENABLE_DISABLE_SPORTS": "Aktibatu/desaktibatu kirolak.",
+  "EQUIPMENT_TYPES": {
+    "TABLE": {
+      "ACTIVE": "Aktibatu",
+      "HAS_EQUIPMENTS": "ekipamendua existitzen da",
+      "IMAGE": "Irudia",
+      "LABEL": "Etiketa"
+    },
+    "TITLE": "Ekipamendu administrazioa"
+  },
+  "NEW_EMAIL": "Eposta berria",
+  "NO_TEXT_ENTERED": "Ez duzu testurik idatzi",
+  "PASSWORD_RESET_SUCCESSFUL": "Pasahitza berrezarri egin da.",
+  "PRIVACY_POLICY_DESCRIPTION": "Gehitu zure pribatutasun politika edo utzi hutsik defektuzkoa erabiltzeko.",
+  "REGISTRATION_DISABLED": "Izen-ematea desaktibatuta dago.",
+  "REGISTRATION_ENABLED": "Izen-ematea aktibatuta dago.",
+  "RESET_USER_PASSWORD": "Berrezarri pasahitza",
+  "SPORTS": {
+    "TABLE": {
+      "ACTIVE": "Aktibo",
+      "HAS_WORKOUTS": "entrenamendua badago",
+      "IMAGE": "Irudia",
+      "LABEL": "Etiketa"
+    },
+    "TITLE": "Kirolen kudeaketa"
+  },
+  "UPDATE_APPLICATION_DESCRIPTION": "Eguneratu aplikazioaren konfigurazioa.",
+  "UPDATE_USER_EMAIL": "Eguneratu eposta",
+  "USER": "erabiltzaileak | erabiltzaileak",
+  "USERS": {
+    "SELECTS": {
+      "ORDER_BY": {
+        "CREATED_AT": "izen-emate data",
+        "IS_ACTIVE": "kontuaren egoera",
+        "ROLE": "rola",
+        "USERNAME": "erabiltzaile-izena",
+        "WORKOUTS_COUNT": "entrenamendu kopurua"
+      }
+    },
+    "TABLE": {
+      "CHANGE_ROLE": "Aldatu rola",
+      "CHANGE_TO_ADMIN": "Aldatu kudeatzaile izatera",
+      "CHANGE_TO_MODERATOR": "Aldatu moderatzaile izatera",
+      "CHANGE_TO_USER": "Aldatu erabiltzaile izatera"
+    },
+    "TITLE": "Kudeaketa - Erabiltzaileak"
+  },
+  "USERS_QUEUED_TASKS": {
+    "DESCRIPTION": "Erakutsi zain dauden lanak",
+    "LABEL": "Zain dauden lanak",
+    "LIST_DESCRIPTION": "Lana egiteko prozesurik ez badago, erabili komando-lerroa prozesatzeko.",
+    "NO_USERS_QUEUED_TASKS": "Ez dago lanik zain",
+    "TASK_TYPES": {
+      "LABEL": "Ekintza-mota",
+      "user_data_export": "Erabiltzaile-datuen esportazioa",
+      "workouts_archive_upload": "Ekintzen fitxategiak kargatzea"
+    },
+    "VIEW_OTHER_TASKS": "Ikusi zain dauden beste lan batzuk"
+  },
+  "USER_EMAIL_UPDATE_SUCCESSFUL": "Eposta helbidea eguneratu egin da."
+}

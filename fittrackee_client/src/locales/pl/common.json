@@ -1,0 +1,59 @@
+{
+  "ABOUT": "o",
+  "ACTION": "akcja",
+  "ACTIVE": "aktywny",
+  "CONFIRMATION": "Potwierdzenie",
+  "CONTACT": "kontakt",
+  "CREATION_DATE": "data utworzenia",
+  "DATA_IS_LOADING": "ładowanie danych…",
+  "DAY": "dzień | dni",
+  "DESCRIPTION": "Opis",
+  "DISABLED": "wyłączone",
+  "DISPLAYED": "Wyświetlony",
+  "DOCUMENTATION": "dokumentacja",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "Nie pokazuj więcej tego komunikatu",
+  "EDITED": "edytowane",
+  "ENABLED": "włączone",
+  "FILES": "Pliki",
+  "HERE": "tutaj",
+  "HIDDEN": "Ukryty",
+  "HIDE": "Ukryj",
+  "HOME": "Dom",
+  "HOURS": "godzina|godzin",
+  "INACTIVE": "nieaktywny",
+  "LABEL": "etykieta",
+  "LAST_UPDATE": "Ostatnia aktualizacja",
+  "LAST_UPDATED_ON": "Ostatnia zmiana",
+  "LOADING": "ładowanie…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Można używać składni Markdown.",
+  "MINUTES": "minuta|minuty",
+  "NEXT": "następna",
+  "NO": "Nie",
+  "NO_DESCRIPTION": "Brak opisu",
+  "NO_NOTES": "Brak notatek",
+  "PHOTOS": "zdjęcia",
+  "PREVIOUS": "poprzednia",
+  "REPORT_PLACEHOLDER": "podaj powód zgłoszenia",
+  "REPORT_SUBMITTED": "Zgłoszenie wysłane.",
+  "SCROLL_DOWN": "Przewiń do dołu",
+  "SCROLL_UP": "Przewiń do góry",
+  "SECONDS": "sekunda|sekund",
+  "SEE_REPORT": "Zobacz zgłoszenie {0}.",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "rosnąco",
+      "DESC": "malejąco",
+      "LABEL": "sortuj"
+    },
+    "ORDER_BY": {
+      "LABEL": "uporządkuj według"
+    },
+    "PER_PAGE": {
+      "LABEL": "na stronę"
+    }
+  },
+  "TOTAL": "łącznie",
+  "TOTAL_DURATION_WITH_PAUSES": "całkowity czas trwania z przerwami",
+  "TYPE": "typ",
+  "YES": "Tak"
+}

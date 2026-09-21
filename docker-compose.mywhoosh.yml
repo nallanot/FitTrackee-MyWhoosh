@@ -1,0 +1,25 @@
+services:
+  fittrackee:
+    image: fittrackee-mywhoosh:local
+    build: .
+
+  fittrackee-mywhoosh-scheduler:
+    image: fittrackee-mywhoosh:local
+    env_file:
+      - .env
+    volumes:
+      - ${HOST_UPLOAD_DIR:-./data/uploads}:/usr/src/app/uploads
+      - ${HOST_STATICMAP_CACHE_DIR:-./data/staticmap_cache}:/usr/src/app/.staticmap_cache
+      - ${HOST_LOG_DIR:-./data/logs}:/usr/src/app/logs
+    command: >-
+      sh -c 'while true; do
+      ftcli integrations mywhoosh-sync || true;
+      sleep "$${MYWHOOSH_SYNC_INTERVAL:-600}";
+      done'
+    depends_on:
+      fittrackee:
+        condition: service_healthy
+    networks:
+      - external_network
+      - internal_network
+    restart: unless-stopped

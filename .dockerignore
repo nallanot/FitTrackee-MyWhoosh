@@ -1,0 +1,16 @@
+.idea
+.git
+.mypy_cache
+.pytest_cache
+.venv
+.env
+.coverage
+.eslintcache
+docker-compose-dev.yml
+docker-compose.yml
+Makefile.custom.config
+*.log
+data
+
+**/__pycache__/
+**/*.py[cod]

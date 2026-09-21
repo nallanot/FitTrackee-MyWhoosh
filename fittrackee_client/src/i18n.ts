@@ -1,0 +1,63 @@
+import { createI18n } from 'vue-i18n'
+
+// import beMessages from '@/locales/be/be'
+import bgMessages from '@/locales/bg/bg'
+// import bnMessages from '@/locales/bn/bn'
+import caMessages from '@/locales/ca/ca'
+import csMessages from '@/locales/cs/cs'
+// import daMessages from '@/locales/da/da'
+import deMessages from '@/locales/de/de'
+import enMessages from '@/locales/en/en'
+import esMessages from '@/locales/es/es'
+import euMessages from '@/locales/eu/eu'
+// import fiMessages from '@/locales/fi/fi'
+import frMessages from '@/locales/fr/fr'
+import glMessages from '@/locales/gl/gl'
+import hrMessages from '@/locales/hr/hr'
+import itMessages from '@/locales/it/it'
+import kabMessages from '@/locales/kab/kab'
+import nbMessages from '@/locales/nb/nb'
+import nlMessages from '@/locales/nl/nl'
+import plMessages from '@/locales/pl/pl'
+import ptMessages from '@/locales/pt/pt'
+import ruMessages from '@/locales/ru/ru'
+// import slMessages from '@/locales/sl/sl'
+// import svMessages from '@/locales/sv/sv'
+// import taMessages from '@/locales/ta/ta'
+import trMessages from '@/locales/tr/tr'
+import zhHansMessages from '@/locales/zh_Hans/zh_Hans'
+
+export default createI18n({
+  legacy: false,
+  locale: 'en',
+  fallbackLocale: 'en',
+  globalInjection: true,
+  messages: {
+    // be: beMessages,
+    bg: bgMessages,
+    // bn: bnMessages,
+    ca: caMessages,
+    cs: csMessages,
+    // da: daMessages,
+    de: deMessages,
+    en: enMessages,
+    es: esMessages,
+    eu: euMessages,
+    // fi: fiMessages,
+    fr: frMessages,
+    gl: glMessages,
+    hr: hrMessages,
+    it: itMessages,
+    kab: kabMessages,
+    nb: nbMessages,
+    nl: nlMessages,
+    pl: plMessages,
+    pt: ptMessages,
+    ru: ruMessages,
+    // sl: slMessages,
+    // sv: svMessages,
+    // ta: taMessages,
+    tr: trMessages,
+    zh_Hans: zhHansMessages,
+  },
+})

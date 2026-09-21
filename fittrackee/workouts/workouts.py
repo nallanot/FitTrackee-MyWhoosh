@@ -1,0 +1,4289 @@
+import json
+from datetime import timedelta
+from decimal import Decimal
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Tuple, Union
+
+import geopandas as gpd
+import requests
+from dramatiq_abort import abort
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    make_response,
+    request,
+    send_from_directory,
+)
+from sqlalchemy import asc, case, desc, distinct, exc, func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql.expression import nulls_first, nulls_last, or_
+from werkzeug.exceptions import NotFound, RequestEntityTooLarge
+from werkzeug.utils import secure_filename
+
+from fittrackee import abortable, appLog, db, limiter
+from fittrackee.constants import DEFAULT_TILE_PROVIDER
+from fittrackee.equipments.exceptions import (
+    InvalidEquipmentException,
+    InvalidEquipmentsException,
+)
+from fittrackee.equipments.models import Equipment, WorkoutEquipment
+from fittrackee.exceptions import FileException
+from fittrackee.files import check_file
+from fittrackee.media.models import Media
+from fittrackee.oauth2.server import require_auth
+from fittrackee.reports.models import ReportActionAppeal
+from fittrackee.responses import (
+    DataNotFoundErrorResponse,
+    EquipmentInvalidPayloadErrorResponse,
+    ExceedingValueErrorResponse,
+    GoneResponse,
+    HttpResponse,
+    InternalServerErrorResponse,
+    InvalidPayloadErrorResponse,
+    NotFoundErrorResponse,
+    PayloadTooLargeErrorResponse,
+    get_error_response_if_file_is_invalid,
+    handle_error_and_return_response,
+)
+from fittrackee.users.models import User, UserTask
+from fittrackee.utils import decode_short_id, encode_uuid
+from fittrackee.visibility_levels import (
+    VisibilityLevel,
+    can_view,
+    can_view_workout_data,
+)
+from fittrackee.workouts.services.elevation.elevation_service import (
+    ElevationService,
+)
+
+from ..constants import (
+    ElevationDataSource,
+    ElevationProcessing,
+    PaceSpeedDisplay,
+)
+from ..files import get_file_extension
+from .constants import (
+    DEFAULT_HEATMAP_ZOOM,
+    MAX_HEATMAP_CELLS,
+    MAX_HEATMAP_MERGES,
+    MAX_HEATMAP_ZOOM,
+    SPORTS_WITHOUT_ELEVATION_DATA,
+    WORKOUT_FILE_DETECTED_MIMETYPES,
+    WORKOUT_FILE_MIMETYPES,
+)
+from .decorators import check_workout
+from .exceptions import (
+    InvalidDurationException,
+    InvalidRadiusException,
+    InvalidVisibilityException,
+    WorkoutElevationException,
+    WorkoutExceedingValueException,
+    WorkoutException,
+    WorkoutFileException,
+    WorkoutGPXException,
+    WorkoutRefreshException,
+)
+from .models import (
+    Sport,
+    Workout,
+    WorkoutHeatmapCell,
+    WorkoutLike,
+    WorkoutSegment,
+)
+from .services import (
+    WorkoutCreationService,
+    WorkoutsFromFileCreationService,
+    WorkoutUpdateService,
+)
+from .services.workouts_from_file_refresh_service import (
+    WorkoutFromFileRefreshService,
+)
+from .utils.chart import get_chart_data
+from .utils.convert import convert_in_duration, convert_pace_in_duration
+from .utils.duration import remove_microseconds
+from .utils.geometry import (
+    get_buffered_location,
+    get_geojson_from_segments,
+)
+from .utils.gpx import generate_gpx
+from .utils.heatmap import (
+    get_cell_size,
+    get_cells_range,
+    get_cells_shift,
+)
+from .utils.sports import (
+    get_elevation_data,
+    get_pace,
+    get_speed,
+    get_sport_displayed_data,
+)
+from .utils.workouts import get_datetime_from_request_args
+
+if TYPE_CHECKING:
+    from flask_sqlalchemy.query import Query
+    from sqlalchemy.sql.selectable import Subquery
+
+    from fittrackee.workouts.utils.sports import SportDisplayedData
+
+workouts_blueprint = Blueprint("workouts", __name__)
+
+DEFAULT_WORKOUTS_PER_PAGE = 5
+MAX_WORKOUTS_PER_PAGE = 100
+MAX_WORKOUTS_TO_SEND = 5
+DEFAULT_WORKOUT_LIKES_PER_PAGE = 10
+TILE_RESPONSE_HEADERS = [
+    "Cache-Control",
+    "ETag",
+    "Expires",
+    "Last-Modified",
+    "Age",
+]
+NO_STATISTICS = {
+    "average_ascent": None,
+    "average_descent": None,
+    "average_distance": None,
+    "average_duration": None,
+    "average_pace": None,
+    "average_speed": None,
+    "count": 0,
+    "best_pace": None,
+    "max_speed": None,
+    "total_ascent": None,
+    "total_descent": None,
+    "total_distance": None,
+    "total_duration": None,
+    "total_sports": 0,
+}
+DEFAULT_TASKS_PER_PAGE = 5
+ERROR_MESSAGE_ON_REFRESH = "Error when refreshing workout"
+MAX_MEDIA_ATTACHMENTS = 20
+
+
+def get_tile_response_headers(headers: Mapping[str, str]) -> Dict[str, str]:
+    response_headers = {}
+
+    for header in TILE_RESPONSE_HEADERS:
+        if header in headers:
+            response_headers[header] = headers[header]
+
+    return response_headers
+
+
+def get_rounded_float_value(row_value: Optional[Decimal]) -> Optional[float]:
+    if row_value is None:
+        return None
+    return round(float(row_value), 2)
+
+
+def get_string_duration_value(row_value: Optional[timedelta]) -> Optional[str]:
+    if row_value is None:
+        return None
+    return str(row_value).split(".")[0]
+
+
+def check_media_attachments(
+    workout_data: dict, is_zip_archive: bool = False
+) -> Optional["InvalidPayloadErrorResponse"]:
+    media_count = len(workout_data.get("media_attachment_ids", []))
+
+    if media_count > 0 and is_zip_archive:
+        return InvalidPayloadErrorResponse(
+            "media attachments can not be associated with a .zip archive"
+        )
+
+    if media_count > MAX_MEDIA_ATTACHMENTS:
+        return InvalidPayloadErrorResponse(
+            f"up to {MAX_MEDIA_ATTACHMENTS} media attachments can be "
+            f"associated with a workout"
+        )
+    return None
+
+
+def get_statistics(
+    workouts_subquery: "Subquery",
+    sport_data_visibility: Optional["SportDisplayedData"],
+) -> Dict:
+    get_speeds = (
+        sport_data_visibility.display_speed if sport_data_visibility else True
+    )
+    get_paces = (
+        sport_data_visibility.display_pace if sport_data_visibility else False
+    )
+    columns: List = [
+        func.sum(
+            case(
+                (
+                    Sport.label.not_in(SPORTS_WITHOUT_ELEVATION_DATA),
+                    workouts_subquery.c.ascent,
+                ),
+                else_=None,
+            )
+        ),
+        func.sum(
+            case(
+                (
+                    Sport.label.not_in(SPORTS_WITHOUT_ELEVATION_DATA),
+                    workouts_subquery.c.descent,
+                ),
+                else_=None,
+            )
+        ),
+        func.sum(workouts_subquery.c.distance),
+        func.sum(workouts_subquery.c.moving),
+        func.avg(
+            case(
+                (
+                    Sport.label.not_in(SPORTS_WITHOUT_ELEVATION_DATA),
+                    workouts_subquery.c.ascent,
+                ),
+                else_=None,
+            )
+        ),
+        func.avg(
+            case(
+                (
+                    Sport.label.not_in(SPORTS_WITHOUT_ELEVATION_DATA),
+                    workouts_subquery.c.descent,
+                ),
+                else_=None,
+            )
+        ),
+        func.avg(workouts_subquery.c.distance),
+        func.avg(workouts_subquery.c.moving),
+        func.count(workouts_subquery.c.id),
+        func.count(distinct(workouts_subquery.c.sport_id)),
+    ]
+    if get_speeds:
+        columns = [
+            *columns,
+            func.avg(workouts_subquery.c.ave_speed),
+            func.max(workouts_subquery.c.max_speed),
+        ]
+    if get_paces:
+        columns = [
+            *columns,
+            func.avg(workouts_subquery.c.ave_pace),
+            func.min(workouts_subquery.c.best_pace),
+        ]
+    stats_query = (
+        db.session.query(*columns)
+        .join(Sport, Sport.id == workouts_subquery.c.sport_id)
+        .first()
+    )
+    if not stats_query:
+        return NO_STATISTICS
+
+    total_sports = stats_query[9]
+    return_speeds = total_sports == 1 and get_speeds
+    ave_pace_raw = 12 if get_speeds else 10
+    max_pace_raw = 13 if get_speeds else 11
+    return {
+        "average_ascent": get_rounded_float_value(stats_query[4]),
+        "average_descent": get_rounded_float_value(stats_query[5]),
+        "average_distance": get_rounded_float_value(stats_query[6]),
+        "average_duration": get_string_duration_value(stats_query[7]),
+        "average_pace": (
+            str(remove_microseconds(stats_query[ave_pace_raw]))
+            if get_paces and stats_query[ave_pace_raw]
+            else None
+        ),
+        "average_speed": (
+            get_rounded_float_value(stats_query[10]) if return_speeds else None
+        ),
+        "best_pace": (
+            str(remove_microseconds(stats_query[max_pace_raw]))
+            if get_paces and stats_query[max_pace_raw]
+            else None
+        ),
+        "count": stats_query[8],
+        "max_speed": (
+            get_rounded_float_value(stats_query[11]) if return_speeds else None
+        ),
+        "total_ascent": get_rounded_float_value(stats_query[0]),
+        "total_descent": get_rounded_float_value(stats_query[1]),
+        "total_distance": get_rounded_float_value(stats_query[2]),
+        "total_duration": get_string_duration_value(stats_query[3]),
+        "total_sports": total_sports,
+    }
+
+
+def download_workout_file(
+    workout_short_id: str, auth_user_id: int, as_gpx: bool = False
+) -> Union[HttpResponse, Response]:
+    workout_uuid = decode_short_id(workout_short_id)
+    workout = Workout.query.filter_by(
+        uuid=workout_uuid, user_id=auth_user_id
+    ).first()
+    if not workout:
+        return DataNotFoundErrorResponse(
+            data_type="workout",
+            message=f"workout not found (id: {workout_short_id})",
+        )
+
+    if not workout.original_file:
+        return DataNotFoundErrorResponse(
+            data_type="original_file",
+            message=f"no original file for workout (id: {workout_short_id})",
+        )
+
+    file_extension = get_file_extension(workout.original_file)
+
+    if not as_gpx or file_extension == "gpx":
+        return send_from_directory(
+            current_app.config["UPLOAD_FOLDER"],
+            workout.original_file,
+            mimetype=WORKOUT_FILE_MIMETYPES[file_extension],
+            as_attachment=True,
+        )
+
+    try:
+        gpx_xml = generate_gpx(workout)
+    except WorkoutGPXException as e:
+        return InternalServerErrorResponse(message=str(e))
+    filename = workout.original_file.replace(file_extension, "gpx")
+    response = make_response(gpx_xml)
+    response.mimetype = WORKOUT_FILE_MIMETYPES["gpx"]
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename={filename}"
+    )
+    return response
+
+
+def get_user_workouts_query(
+    auth_user: "User", params: Dict, *, as_feature_collection: bool = False
+) -> Tuple["Query", int, int]:
+    page = int(params.get("page", 1))
+    date_from, date_to = get_datetime_from_request_args(params, auth_user)
+    distance_from = params.get("distance_from")
+    distance_to = params.get("distance_to")
+    duration_from = params.get("duration_from")
+    duration_to = params.get("duration_to")
+    ave_pace_from = params.get("ave_pace_from")
+    ave_pace_to = params.get("ave_pace_to")
+    ave_speed_from = params.get("ave_speed_from")
+    ave_speed_to = params.get("ave_speed_to")
+    max_pace_from = params.get("max_pace_from")
+    max_pace_to = params.get("max_pace_to")
+    max_speed_from = params.get("max_speed_from")
+    max_speed_to = params.get("max_speed_to")
+    ascent_from = params.get("ascent_from")
+    ascent_to = params.get("ascent_to")
+    descent_from = params.get("descent_from")
+    descent_to = params.get("descent_to")
+    order_by = params.get("order_by", "workout_date")
+    workout_column = getattr(
+        Workout, "moving" if order_by == "duration" else order_by
+    )
+    order = params.get("order", "desc")
+    sport_id = params.get("sport_id")
+    title = params.get("title")
+    notes = params.get("notes")
+    description = params.get("description")
+    coordinates = params.get("coordinates")
+    radius = params.get("radius", "10")
+    if "equipment_id" in params:
+        if params["equipment_id"] == "none":
+            equipment_id: Union[str, int, None] = "none"
+        else:
+            equipment_uuid = decode_short_id(params["equipment_id"])
+            equipment = Equipment.query.filter_by(uuid=equipment_uuid).first()
+            equipment_id = equipment.id if equipment else 0
+    else:
+        equipment_id = None
+    workout_visibility = params.get("workout_visibility")
+    per_page = int(params.get("per_page", DEFAULT_WORKOUTS_PER_PAGE))
+    if per_page > MAX_WORKOUTS_PER_PAGE:
+        per_page = MAX_WORKOUTS_PER_PAGE
+
+    if as_feature_collection:
+        geom_subquery = (
+            select(WorkoutSegment.geom)
+            .filter(WorkoutSegment.workout_id == Workout.id)
+            .order_by(WorkoutSegment.start_date)
+            .scalar_subquery()
+        )
+
+        workouts_query = db.session.query(
+            Workout.bounds,
+            Workout.uuid,
+            Workout.sport_id,
+            Workout.title,
+            Workout.workout_visibility,
+            (
+                func.ST_AsGeoJSON(func.ST_Collect(func.array(geom_subquery)))
+            ).label("workout_geojson"),
+        )
+    else:
+        workouts_query = Workout.query
+
+    filters = [
+        Workout.user_id == auth_user.id,
+        Workout.suspended_at == None,  # noqa
+    ]
+
+    if sport_id:
+        filters.append(Workout.sport_id == sport_id)
+    if title:
+        filters.append(Workout.title.ilike(f"%{title}%"))
+    if notes:
+        filters.append(Workout.notes.ilike(f"%{notes}%"))
+    if description:
+        filters.append(Workout.description.ilike(f"%{description}%"))
+    if date_from:
+        filters.append(Workout.workout_date >= date_from)
+    if date_to:
+        filters.append(Workout.workout_date < date_to + timedelta(seconds=1))
+    if distance_from:
+        filters.append(Workout.distance >= float(distance_from))
+    if distance_to:
+        filters.append(Workout.distance <= float(distance_to))
+    if duration_from:
+        filters.append(Workout.moving >= convert_in_duration(duration_from))
+    if duration_to:
+        filters.append(Workout.moving <= convert_in_duration(duration_to))
+    if ave_pace_from:
+        filters.append(
+            Workout.ave_pace >= convert_pace_in_duration(ave_pace_from)
+        )
+    if ave_pace_to:
+        filters.append(
+            Workout.ave_pace <= convert_pace_in_duration(ave_pace_to)
+        )
+    if max_pace_from:
+        filters.append(
+            Workout.best_pace >= convert_pace_in_duration(max_pace_from)
+        )
+    if max_pace_to:
+        filters.append(
+            Workout.best_pace <= convert_pace_in_duration(max_pace_to)
+        )
+    if ave_speed_from:
+        filters.append(Workout.ave_speed >= float(ave_speed_from))
+    if ave_speed_to:
+        filters.append(Workout.ave_speed <= float(ave_speed_to))
+    if max_speed_from:
+        filters.append(Workout.max_speed >= float(max_speed_from))
+    if max_speed_to:
+        filters.append(Workout.max_speed <= float(max_speed_to))
+    if ascent_from:
+        filters.append(Workout.ascent >= float(ascent_from))
+    if ascent_to:
+        ascent_filter = Workout.ascent <= float(ascent_to)
+        if not ascent_from:
+            filters.append(
+                or_(
+                    ascent_filter,
+                    Workout.ascent == None,  # noqa
+                )
+            )
+        else:
+            filters.append(ascent_filter)
+    if descent_from:
+        filters.append(Workout.descent >= float(descent_from))
+    if descent_to:
+        descent_filter = Workout.descent <= float(descent_to)
+        if not descent_from:
+            filters.append(
+                or_(
+                    descent_filter,
+                    Workout.descent == None,  # noqa
+                )
+            )
+        else:
+            filters.append(descent_filter)
+    if equipment_id == "none":
+        workouts_query = workouts_query.outerjoin(WorkoutEquipment)
+        filters.append(WorkoutEquipment.c.equipment_id == None)  # noqa
+    elif equipment_id is not None:
+        workouts_query = workouts_query.outerjoin(WorkoutEquipment)
+        filters.append(WorkoutEquipment.c.equipment_id == equipment_id)
+    if coordinates:
+        buffer = get_buffered_location(coordinates, radius)
+        subquery = (
+            db.session.query(WorkoutSegment.workout_id)
+            .filter(func.ST_Intersects(buffer, WorkoutSegment.geom))
+            .subquery()
+        )
+        filters.append(Workout.id.in_(select(subquery)))  # type: ignore[arg-type]
+    if workout_visibility:
+        if workout_visibility not in {item.value for item in VisibilityLevel}:
+            raise InvalidVisibilityException()
+        filters.append(
+            Workout.workout_visibility
+            == VisibilityLevel(workout_visibility).value
+        )
+
+    workouts_query = workouts_query.filter(*filters)
+    if as_feature_collection:
+        workouts_query = workouts_query.group_by(
+            Workout.workout_date, Workout.id
+        )
+
+    if order_by in ["ascent", "descent"]:
+        order_by_column = (
+            nulls_first(asc(workout_column))
+            if order == "asc"
+            else nulls_last(desc(workout_column))
+        )
+    else:
+        order_by_column = (
+            asc(workout_column) if order == "asc" else desc(workout_column)
+        )
+    workouts_query = workouts_query.order_by(order_by_column)
+    return workouts_query, page, per_page
+
+
+@workouts_blueprint.route("/workouts", methods=["GET"])
+@require_auth(scopes=["workouts:read"])
+def get_workouts(auth_user: User) -> Union[Dict, HttpResponse]:
+    """
+    Get workouts for the authenticated user.
+
+    **Scope**: ``workouts:read``
+
+    **Example requests**:
+
+    - without parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/ HTTP/1.1
+
+    - with some query parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts?from=2019-07-02&to=2019-07-31&sport_id=1  HTTP/1.1
+
+    **Example responses**:
+
+    - returning at least one workout:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": null,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 18.0,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Sun, 14 Jul 2019 13:51:01 GMT",
+                "descent": null,
+                "distance": 18.0,
+                "duration": "1:00:00",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "kjxavSTUrJvoAh2wvCeGEF",
+                "liked": false,
+                "likes_count": 0,
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": null,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 18.0,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": null,
+                "modification_date": null,
+                "moving": "1:00:00",
+                "next_workout": null,
+                "notes": "",
+                "pauses": null,
+                "previous_workout": null,
+                "records": [],
+                "segments": [],
+                "sport_id": 1,
+                "suspended": false,
+                "suspended_at": null,
+                "title": "Cycling (Sport) - 2018-01-01 08:00:00",
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Mon, 01 Jan 2018 07:00:00 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "pagination": {
+            "has_next": false,
+            "has_prev": false,
+            "page": 1,
+            "pages": 1,
+            "total": 1
+          },
+          "status": "success"
+        }
+
+    - returning no workouts
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": []
+          },
+          "pagination": {
+            "has_next": false,
+            "has_prev": false,
+            "page": 1,
+            "pages": 0,
+            "total": 0
+          },
+          "status": "success"
+        }
+
+    - with statistics
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "statistics": {
+              "all": {
+                "ave_speed": null,
+                "count": 0,
+                "max_speed": null,
+                "total_ascent": null,
+                "total_descent": null,
+                "total_distance": null,
+                "total_duration": null
+              },
+              "current_page": {
+                "ave_speed": null,
+                "count": 0,
+                "max_speed": null,
+                "total_ascent": null,
+                "total_descent": null,
+                "total_distance": null,
+                "total_duration": null
+              }
+            },
+            "workouts": []
+          },
+          "pagination": {
+            "has_next": false,
+            "has_prev": false,
+            "page": 1,
+            "pages": 0,
+            "total": 0
+          },
+          "status": "success"
+        }
+
+    :query integer page: page if using pagination (default: 1)
+    :query integer per_page: number of workouts per page
+                             (default: 5, max: 100)
+    :query integer sport_id: sport id
+    :query string title: any part (or all) of the workout title;
+                         title matching is case-insensitive
+    :query string from: start date (format: ``%Y-%m-%d``)
+    :query string to: end date (format: ``%Y-%m-%d``)
+    :query float distance_from: minimal distance
+    :query float distance_to: maximal distance
+    :query string duration_from: minimal duration (format: ``%H:%M``)
+    :query string duration_to: maximal distance (format: ``%H:%M``)
+    :query float ave_speed_from: minimal average speed
+    :query float ave_speed_to: maximal average speed
+    :query float max_speed_from: minimal max. speed
+    :query float max_speed_to: maximal max. speed
+    :query string order: sorting order: ``asc``, ``desc`` (default: ``desc``)
+    :query string order_by: sorting criteria: ``ascent``, ``ave_speed``,
+                            ``descent``, ``distance``,
+                            ``duration``, ``workout_date`` (default:
+                            ``workout_date``)
+    :query string equipment_id: equipment id (if ``none``, only workouts
+                            without equipments will be returned)
+    :query string notes: any part (or all) of the workout notes,
+                         notes matching is case-insensitive
+    :query string description: any part of the workout description;
+                         description matching is case-insensitive
+    :query boolean return_equipments: return workouts with equipment
+                         (by default, equipment is not returned).
+                         **Note**: It's not a filter.
+                         **Warning**: Needed for 3rd-party applications
+                         updating equipments.
+    :query string workout_visibility: workout visibility (``private``,
+                         ``followers_only`` or ``public``)
+    :query boolean with_statistics: return statistics when ``true``
+                        (by default, statistics are not returned)
+    :query string coordinates: location coordinates separated with a comma
+                        (latitude, longitude)
+    :query integer radius: radius in km, only used when location is provided
+                        (default: 10)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 400:
+        - ``invalid duration``
+        - ``invalid value for visibility``
+        - ``invalid radius, must be an float greater than zero``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    params = request.args.copy()
+    try:
+        workouts_query, page, per_page = get_user_workouts_query(
+            auth_user, params
+        )
+        workouts_pagination = workouts_query.paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        workouts = workouts_pagination.items
+        with_equipments = (
+            params.get("return_equipments", "false").lower() == "true"
+        )
+
+        force_display_speed = False
+        if (
+            workouts_pagination.total
+            and workouts_pagination.total > 1
+            and "sport_id" not in params
+        ):
+            workouts_sports = {workout.sport for workout in workouts}
+            force_display_speed = any(
+                sport.pace_speed_display == PaceSpeedDisplay.SPEED
+                for sport in workouts_sports
+            )
+
+        statistics = {}
+        if params.get("with_statistics", "false").lower() == "true":
+            # no workouts returned
+            if workouts_pagination.total == 0:
+                statistics = {
+                    "statistics": {
+                        "current_page": {**NO_STATISTICS},
+                        "all": {**NO_STATISTICS},
+                    }
+                }
+            # only one workout returned
+            elif workouts_pagination.total == 1:
+                workout = workouts[0]
+                sport_data_visibility = get_sport_displayed_data(
+                    workout.sport, auth_user
+                )
+                ascent = get_elevation_data(
+                    workout.ascent, True, sport_data_visibility
+                )
+                descent = get_elevation_data(
+                    workout.descent, True, sport_data_visibility
+                )
+                distance = (
+                    None
+                    if workout.distance is None
+                    else float(workout.distance)
+                )
+                duration = (
+                    None if workout.moving is None else str(workout.moving)
+                )
+                workout_total: Dict = {
+                    "average_ascent": ascent,
+                    "average_descent": descent,
+                    "average_distance": distance,
+                    "average_duration": duration,
+                    "average_pace": get_pace(
+                        workout.ave_pace, sport_data_visibility
+                    ),
+                    "average_speed": get_speed(
+                        workout.ave_speed,
+                        sport_data_visibility,
+                        workout.ave_pace,
+                    ),
+                    "count": 1,
+                    "max_speed": get_speed(
+                        workout.max_speed,
+                        sport_data_visibility,
+                        workout.best_pace,
+                    ),
+                    "best_pace": get_pace(
+                        workout.best_pace, sport_data_visibility
+                    ),
+                    "total_ascent": ascent,
+                    "total_descent": descent,
+                    "total_distance": distance,
+                    "total_duration": duration,
+                    "total_sports": 1,
+                }
+                statistics = {
+                    "statistics": {
+                        "current_page": {**workout_total},
+                        "all": {**workout_total},
+                    }
+                }
+            # more than one workout is returned
+            else:
+                workouts_subquery = (
+                    workouts_query.offset((page - 1) * per_page)
+                    .limit(per_page)
+                    .subquery()
+                )
+                # if sport id is provided, get pace and speed visibility
+                # depending on sport
+                sport_data_visibility = None
+                if "sport_id" in params:
+                    sport_data_visibility = get_sport_displayed_data(
+                        workouts[0].sport, auth_user
+                    )
+                # if only one page is returned and all workouts are associated
+                # with the same sport, get pace and speed visibility depending
+                # on this sport
+                elif workouts_pagination.pages == 1:
+                    sports = {workout.sport for workout in workouts}
+                    if len(sports) == 1:
+                        sport_data_visibility = get_sport_displayed_data(
+                            workouts[0].sport, auth_user
+                        )
+                current_page_stats = get_statistics(
+                    workouts_subquery, sport_data_visibility
+                )
+                statistics = {
+                    "statistics": {"current_page": current_page_stats}
+                }
+
+                if current_page_stats["count"] == workouts_pagination.total:
+                    statistics["statistics"]["all"] = {**current_page_stats}
+                else:
+                    all_workouts_subquery = workouts_query
+                    if current_app.config["stats_workouts_limit"]:
+                        all_workouts_subquery = all_workouts_subquery.limit(
+                            max(
+                                current_app.config["stats_workouts_limit"],
+                                per_page,
+                            )
+                        )
+                    workouts_subquery = all_workouts_subquery.subquery()
+                    statistics["statistics"]["all"] = get_statistics(
+                        workouts_subquery, sport_data_visibility
+                    )
+
+        return {
+            "status": "success",
+            "data": {
+                "workouts": [
+                    workout.serialize(
+                        user=auth_user,
+                        params=params,
+                        with_equipments=with_equipments,
+                        force_display_speed=force_display_speed,
+                        with_media_attachments=False,
+                    )
+                    for workout in workouts
+                ],
+                **statistics,
+            },
+            "pagination": {
+                "has_next": workouts_pagination.has_next,
+                "has_prev": workouts_pagination.has_prev,
+                "page": workouts_pagination.page,
+                "pages": workouts_pagination.pages,
+                "total": workouts_pagination.total,
+            },
+        }
+    except (
+        InvalidDurationException,
+        InvalidRadiusException,
+        InvalidVisibilityException,
+    ) as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+
+@workouts_blueprint.route("/workouts/collection", methods=["GET"])
+@require_auth(scopes=["workouts:read"])
+def get_workouts_feature_collection(
+    auth_user: User,
+) -> Union[Dict, HttpResponse]:
+    """
+    Get workouts for the authenticated user as a feature collection, in order
+    to display the workouts listed in the workout list on the map.
+
+    Note: the pagination returns counts for all workouts (with or without
+    geometries) to match `/api/workouts` pagination on the user interface.
+
+    **Scope**: ``workouts:read``
+
+    **Example requests**:
+
+    - without parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/ HTTP/1.1
+
+    - with some query parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts?from=2019-07-02&to=2019-07-31&sport_id=1  HTTP/1.1
+
+    **Example responses**:
+
+    - returning at least one workout:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "bbox": [
+              6.07355,
+              44.67822,
+              6.07442,
+              44.68095
+            ],
+            "features": [
+              {
+                "geometry": {
+                  "coordinates": [
+                    [
+                      [
+                        6.07367,
+                        44.68095
+                      ],
+                      [
+                        6.07367,
+                        44.68091
+                      ],
+                      [
+                        6.07364,
+                        44.6808
+                      ],
+                      [
+                        6.07364,
+                        44.68075
+                      ],
+                      [
+                        6.07364,
+                        44.68071
+                      ],
+                      [
+                        6.07361,
+                        44.68049
+                      ],
+                      [
+                        6.07356,
+                        44.68019
+                      ],
+                      [
+                        6.07355,
+                        44.68014
+                      ],
+                      [
+                        6.07358,
+                        44.67995
+                      ]
+                    ],
+                    [
+                      [
+                        6.07364,
+                        44.67977
+                      ],
+                      [
+                        6.07367,
+                        44.67972
+                      ],
+                      [
+                        6.07368,
+                        44.67966
+                      ],
+                      [
+                        6.0737,
+                        44.67961
+                      ],
+                      [
+                        6.07377,
+                        44.67938
+                      ],
+                      [
+                        6.07381,
+                        44.67933
+                      ],
+                      [
+                        6.07385,
+                        44.67922
+                      ],
+                      [
+                        6.0739,
+                        44.67911
+                      ],
+                      [
+                        6.07399,
+                        44.679
+                      ],
+                      [
+                        6.07402,
+                        44.67896
+                      ],
+                      [
+                        6.07408,
+                        44.67884
+                      ],
+                      [
+                        6.07423,
+                        44.67863
+                      ],
+                      [
+                        6.07425,
+                        44.67858
+                      ],
+                      [
+                        6.07434,
+                        44.67842
+                      ],
+                      [
+                        6.07435,
+                        44.67837
+                      ],
+                      [
+                        6.07442,
+                        44.67822
+                      ]
+                    ]
+                  ],
+                  "type": "MultiLineString"
+                },
+                "properties": {
+                  "bounds": [
+                      44.67822,
+                      6.07355,
+                      44.68095,
+                      6.07442
+                  ],
+                  "id": "XZyLvgWdUcxmQYzxZhquqt",
+                  "sport_id": 1,
+                  "title": null,
+                  "workout_visibility": "private"
+                },
+                "type": "Feature"
+              }
+            ],
+            "type": "FeatureCollection"
+          }
+          "pagination": {
+            "has_next": false,
+            "has_prev": false,
+            "page": 1,
+            "pages": 1,
+            "total": 1
+          },
+          "status": "success"
+        }
+
+    - returning no workouts
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "bbox": [],
+            "features": [],
+            "type": "FeatureCollection"
+          },
+          "pagination": {
+            "has_next": false,
+            "has_prev": false,
+            "page": 1,
+            "pages": 0,
+            "total": 0
+          },
+          "status": "success"
+        }
+
+    :query integer page: page if using pagination (default: 1)
+    :query integer per_page: number of workouts per page
+                             (default: 5, max: 100)
+    :query integer sport_id: sport id
+    :query string title: any part (or all) of the workout title;
+                         title matching is case-insensitive
+    :query string from: start date (format: ``%Y-%m-%d``)
+    :query string to: end date (format: ``%Y-%m-%d``)
+    :query float distance_from: minimal distance
+    :query float distance_to: maximal distance
+    :query string duration_from: minimal duration (format: ``%H:%M``)
+    :query string duration_to: maximal distance (format: ``%H:%M``)
+    :query float ave_speed_from: minimal average speed
+    :query float ave_speed_to: maximal average speed
+    :query float max_speed_from: minimal max. speed
+    :query float max_speed_to: maximal max. speed
+    :query string order: sorting order: ``asc``, ``desc`` (default: ``desc``)
+    :query string order_by: sorting criteria: ``ave_speed``, ``distance``,
+                            ``duration``, ``workout_date`` (default:
+                            ``workout_date``)
+    :query string equipment_id: equipment id (if ``none``, only workouts
+                            without equipments will be returned)
+    :query string notes: any part (or all) of the workout notes,
+                         notes matching is case-insensitive
+    :query string description: any part of the workout description;
+                         description matching is case-insensitive
+    :query boolean return_equipments: return workouts with equipment
+                         (by default, equipment is not returned).
+                         **Note**: It's not a filter.
+                         **Warning**: Needed for 3rd-party applications
+                         updating equipments.
+    :query string workout_visibility: workout visibility (``private``,
+                         ``followers_only`` or ``public``)
+    :query string coordinates: location coordinates separated with a comma
+                        (latitude, longitude)
+    :query integer radius: radius in km, only used when location is provided
+                        (default: 10)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 400:
+        - ``invalid duration``
+        - ``invalid value for visibility``
+        - ``invalid radius, must be an float greater than zero``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    params = request.args.copy()
+    try:
+        workouts_query, page, per_page = get_user_workouts_query(
+            auth_user, params, as_feature_collection=True
+        )
+        workouts_pagination = workouts_query.paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        workouts = workouts_pagination.items
+
+        features = [
+            {
+                "type": "Feature",
+                "properties": {
+                    "bounds": workout[0],
+                    "id": encode_uuid(workout[1]),
+                    "sport_id": workout[2],
+                    "title": workout[3],
+                    "workout_visibility": workout[4],
+                },
+                "geometry": json.loads(workout[5]),
+            }
+            for workout in workouts
+            if workout[5] is not None
+        ]
+
+        if features:
+            df = gpd.GeoDataFrame.from_features(features)
+            bbox = list(df.total_bounds)
+        else:
+            bbox = []
+
+        return {
+            "status": "success",
+            "data": {
+                "bbox": bbox,
+                "features": features,
+                "type": "FeatureCollection",
+            },
+            "pagination": {
+                "has_next": workouts_pagination.has_next,
+                "has_prev": workouts_pagination.has_prev,
+                "page": workouts_pagination.page,
+                "pages": workouts_pagination.pages,
+                "total": workouts_pagination.total,
+            },
+        }
+    except (
+        InvalidDurationException,
+        InvalidRadiusException,
+        InvalidVisibilityException,
+    ) as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+
+@workouts_blueprint.route("/workouts/global-map", methods=["GET"])
+@require_auth(scopes=["workouts:read"])
+def get_workouts_for_global_map(auth_user: User) -> Union[Dict, HttpResponse]:
+    """
+    Get all workouts with start point geometry for the authenticated user
+    as a feature collection, in order to display workouts on the global map.
+
+    **Scope**: ``workouts:read``
+
+    **Example requests**:
+
+    - without parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/ HTTP/1.1
+
+    - with some query parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts?from=2019-07-02&to=2019-07-31&sport_ids=1,2  HTTP/1.1
+
+    **Example responses**:
+
+    - returning at least one workout:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "bbox": [
+              6.07367,
+              44.68095,
+              6.07367,
+              44.68095
+            ],
+            "features": [
+              {
+                "geometry": {
+                  "coordinates": [
+                    6.07367,
+                    44.68095
+                  ],
+                  "type": "Point"
+                },
+                "properties": {
+                  "bounds": [
+                      44.67822,
+                      6.07355,
+                      44.68095,
+                      6.07442
+                  ],
+                  "id": "XZyLvgWdUcxmQYzxZhquqt",
+                  "sport_id": 1,
+                  "title": null,
+                  "workout_visibility": "private"
+                },
+                "type": "Feature"
+              }
+            ],
+            "limit_exceeded": false,
+            "type": "FeatureCollection"
+          }
+          "status": "success"
+        }
+
+    - returning no workouts
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "bbox": [],
+            "features": [],
+            "limit_exceeded": false,
+            "type": "FeatureCollection"
+          },
+          "status": "success"
+        }
+
+    :query string from: start date (format: ``%Y-%m-%d``)
+    :query string to: end date (format: ``%Y-%m-%d``)
+    :query string sport_ids: ids of sports, separated by a comma
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 400:
+        - ``invalid date format, expecting '%Y-%m-%d'``
+        - ``invalid sport_ids``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    params = request.args.copy()
+
+    try:
+        date_from, date_to = get_datetime_from_request_args(params, auth_user)
+    except ValueError:
+        return InvalidPayloadErrorResponse(
+            "invalid date format, expecting '%Y-%m-%d'"
+        )
+
+    try:
+        sport_ids_str = params.get("sport_ids", "")
+        sport_ids = (
+            [int(sport_id) for sport_id in sport_ids_str.split(",")]
+            if sport_ids_str
+            else []
+        )
+    except ValueError:
+        return InvalidPayloadErrorResponse("invalid sport_ids")
+
+    try:
+        filters = [
+            Workout.user_id == auth_user.id,
+            Workout.suspended_at == None,  # noqa
+            Workout.start_point_geom != None,  # noqa
+        ]
+
+        if date_from:
+            filters.append(Workout.workout_date >= date_from)
+        if date_to:
+            filters.append(
+                Workout.workout_date < date_to + timedelta(seconds=1)
+            )
+        if sport_ids:
+            filters.append(Workout.sport_id.in_(sport_ids))
+
+        workouts = (
+            db.session.query(
+                Workout.bounds,
+                Workout.uuid,
+                Workout.sport_id,
+                Workout.title,
+                Workout.workout_visibility,
+                func.ST_AsGeoJSON(Workout.start_point_geom),
+            )
+            .filter(*filters)
+            .order_by(Workout.workout_date.desc())
+        )
+        total_workouts_count = workouts.count()
+
+        features = []
+        for workout in workouts.limit(
+            current_app.config["global_map_workouts_limit"]
+        ).all():
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "bounds": workout[0],
+                        "id": encode_uuid(workout[1]),
+                        "sport_id": workout[2],
+                        "title": workout[3],
+                        "workout_visibility": workout[4],
+                    },
+                    "geometry": json.loads(workout[5]),
+                }
+            )
+
+        if features:
+            df = gpd.GeoDataFrame.from_features(features)
+            bbox = list(df.total_bounds)
+        else:
+            bbox = []
+
+        return {
+            "status": "success",
+            "data": {
+                "bbox": bbox,
+                "features": features,
+                "limit_exceeded": total_workouts_count > len(features),
+                "type": "FeatureCollection",
+            },
+        }
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+
+def get_bounding_box(bbox_param: str) -> List[float]:
+    bbox = [float(coordinate) for coordinate in bbox_param.split(",")]
+    if len(bbox) != 4:
+        raise ValueError()
+    min_lng, min_lat, max_lng, max_lat = bbox
+    if (
+        not -180 <= min_lng <= 180
+        or not -180 <= max_lng <= 180
+        or not -90 <= min_lat <= 90
+        or not -90 <= max_lat <= 90
+        or min_lng > max_lng
+        or min_lat > max_lat
+    ):
+        raise ValueError()
+    return bbox
+
+
+@workouts_blueprint.route("/workouts/heatmap", methods=["GET"])
+@require_auth(scopes=["workouts:read"])
+def get_workouts_heatmap(auth_user: User) -> Union[Dict, HttpResponse]:
+    """
+    Get the heatmap cells for the authenticated user.
+
+    A cell is a square of the grid the tracks are stored on, given by its
+    indices and the number of distinct workouts crossing it, so that the
+    client can shade it depending on how much it is travelled.
+
+    Cells are merged to match the given zoom level, and merged further when a
+    dense view would return too many of them, so ``cell_size`` (in meters in
+    Web Mercator) may be coarser than the zoom level alone would give: it is
+    the size of the returned cells and the client displays them accordingly.
+
+    **Scope**: ``workouts:read``
+
+    **Example requests**:
+
+    - without parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/heatmap HTTP/1.1
+
+    - with some query parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/heatmap?zoom=12&sport_ids=1,2  HTTP/1.1
+
+    **Example responses**:
+
+    - returning at least one cell:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "cell_size": 9.554628535647035,
+            "cells": [
+              [8842190, 156543, 3]
+            ]
+          },
+          "status": "success"
+        }
+
+    - returning no cells
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "cell_size": 1222.9924525628205,
+            "cells": []
+          },
+          "status": "success"
+        }
+
+    :query string from: start date (format: ``%Y-%m-%d``)
+    :query string to: end date (format: ``%Y-%m-%d``)
+    :query string sport_ids: ids of sports, separated by a comma
+    :query integer zoom: zoom level, used to merge cells (default: 10)
+    :query string bbox: only return cells intersecting this bounding box
+        (format: ``min_lng,min_lat,max_lng,max_lat``)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 400:
+        - ``invalid date format, expecting '%Y-%m-%d'``
+        - ``invalid sport_ids``
+        - ``invalid zoom``
+        - ``invalid bbox``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    params = request.args.copy()
+
+    try:
+        date_from, date_to = get_datetime_from_request_args(params, auth_user)
+    except ValueError:
+        return InvalidPayloadErrorResponse(
+            "invalid date format, expecting '%Y-%m-%d'"
+        )
+
+    try:
+        sport_ids_str = params.get("sport_ids", "")
+        sport_ids = (
+            [int(sport_id) for sport_id in sport_ids_str.split(",")]
+            if sport_ids_str
+            else []
+        )
+    except ValueError:
+        return InvalidPayloadErrorResponse("invalid sport_ids")
+
+    try:
+        zoom = int(params.get("zoom", DEFAULT_HEATMAP_ZOOM))
+        if not 0 <= zoom <= MAX_HEATMAP_ZOOM:
+            raise ValueError()
+    except ValueError:
+        return InvalidPayloadErrorResponse("invalid zoom")
+
+    bbox_param = params.get("bbox")
+    try:
+        bbox = get_bounding_box(bbox_param) if bbox_param else None
+    except ValueError:
+        return InvalidPayloadErrorResponse("invalid bbox")
+
+    try:
+        filters = [
+            # on the cells, so that only this user's rows are scanned
+            WorkoutHeatmapCell.user_id == auth_user.id,
+            Workout.suspended_at == None,  # noqa
+        ]
+        if date_from:
+            filters.append(Workout.workout_date >= date_from)
+        if date_to:
+            filters.append(
+                Workout.workout_date < date_to + timedelta(seconds=1)
+            )
+        if sport_ids:
+            filters.append(Workout.sport_id.in_(sport_ids))
+
+        def get_cells_query(shift: int) -> "Query":
+            cell_filters = list(filters)
+            if bbox:
+                min_i, min_j, max_i, max_j = get_cells_range(bbox, shift)
+                # filtering on the stored indices keeps their index usable
+                cell_filters.extend(
+                    [
+                        WorkoutHeatmapCell.i.between(min_i, max_i),
+                        WorkoutHeatmapCell.j.between(min_j, max_j),
+                    ]
+                )
+            # counting the distinct workouts in a subquery, instead of with
+            # count(DISTINCT ...), lets postgres hash the groups: a wide view
+            # covers most of the table and sorting it spills to disk
+            workouts_cells = (
+                db.session.query(
+                    WorkoutHeatmapCell.workout_id,
+                    WorkoutHeatmapCell.i.op(">>")(shift).label("cell_i"),
+                    WorkoutHeatmapCell.j.op(">>")(shift).label("cell_j"),
+                )
+                .join(Workout, Workout.id == WorkoutHeatmapCell.workout_id)
+                .filter(*cell_filters)
+                .distinct()
+                .subquery()
+            )
+            return db.session.query(
+                workouts_cells.c.cell_i,
+                workouts_cells.c.cell_j,
+                func.count().label("workouts_count"),
+            ).group_by(workouts_cells.c.cell_i, workouts_cells.c.cell_j)
+
+        # returning every cell of a dense view would send megabytes, so the
+        # cells are merged further until they fit: a coarser heatmap is more
+        # useful than one missing its quieter paths
+        shift = get_cells_shift(zoom)
+        for _ in range(MAX_HEATMAP_MERGES):
+            cells = (
+                get_cells_query(shift)
+                .order_by(desc("workouts_count"))
+                # an extra row tells us whether the limit has been reached
+                .limit(MAX_HEATMAP_CELLS + 1)
+                .all()
+            )
+            if len(cells) <= MAX_HEATMAP_CELLS:
+                break
+            shift += 1
+
+        return {
+            "status": "success",
+            "data": {
+                "cells": [
+                    [cell.cell_i, cell.cell_j, cell.workouts_count]
+                    for cell in cells[:MAX_HEATMAP_CELLS]
+                ],
+                # cells are sent as indices rather than polygons: at this
+                # resolution a viewport holds thousands of them
+                "cell_size": get_cell_size(shift),
+            },
+        }
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+@check_workout(only_owner=False)
+def get_workout(
+    auth_user: Optional[User], workout: Workout, workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get a workout.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF HTTP/1.1
+
+    **Example responses**:
+
+    - success:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": null,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 16,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Sun, 14 Jul 2019 18:57:14 GMT",
+                "descent": null,
+                "description": null,
+                "distance": 12,
+                "duration": "0:45:00",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "kjxavSTUrJvoAh2wvCeGEF",
+                "liked": false,
+                "likes_count": 0,
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": null,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 16,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": null,
+                "modification_date": "Sun, 14 Jul 2019 18:57:22 GMT",
+                "moving": "0:45:00",
+                "next_workout": 4,
+                "notes": "workout without gpx",
+                "pauses": null,
+                "previous_workout": 3,
+                "records": [],
+                "segments": [],
+                "sport_id": 1,
+                "stats_from_file": false,
+                "suspended": false,
+                "suspended_at": null,
+                "title": "biking on sunday morning",
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Sun, 07 Jul 2019 07:00:00 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    - workout not found:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 404 NOT FOUND
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": []
+          },
+          "status": "not found"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` visibility
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+
+    """
+    return {
+        "status": "success",
+        "data": {"workouts": [workout.serialize(user=auth_user, light=False)]},
+    }
+
+
+def get_workout_data(
+    auth_user: Optional[User],
+    workout_short_id: str,
+    data_type: str,
+    segment_short_id: Optional[str] = None,
+) -> Union[Dict, HttpResponse]:
+    """Get data from workout gpx file"""
+    not_found_response = DataNotFoundErrorResponse(
+        data_type=data_type,
+        message=f"workout not found (id: {workout_short_id})",
+    )
+    workout_uuid = decode_short_id(workout_short_id)
+    workout = Workout.query.filter_by(uuid=workout_uuid).first()
+    if not workout:
+        return not_found_response
+
+    if not can_view(
+        workout,
+        (
+            "calculated_analysis_visibility"
+            if data_type == "chart_data"
+            else "calculated_map_visibility"
+        ),
+        auth_user,
+    ):
+        return not_found_response
+
+    if not workout.original_file or workout.original_file == "":
+        return NotFoundErrorResponse(
+            f"no file for this workout (id: {workout_short_id})"
+        )
+
+    try:
+        can_see_heart_rate = can_view_workout_data(
+            "hr", workout.user, auth_user
+        )
+        if data_type == "chart_data":
+            can_see_map_data = can_view(
+                workout,
+                "calculated_map_visibility",
+                user=auth_user,
+            )
+            data: "Dict" = {
+                "chart_data": get_chart_data(
+                    workout,
+                    user=auth_user,
+                    can_see_map_data=can_see_map_data,
+                    can_see_heart_rate=can_see_heart_rate,
+                    segment_short_id=segment_short_id,
+                )
+            }
+        else:  # data_type == "geojson"
+            geojson = get_geojson_from_segments(
+                workout, segment_short_id=segment_short_id
+            )
+            # Handle error differently when using workout segment uuid
+            if not geojson:
+                return NotFoundErrorResponse("geojson not found")
+            data = {"geojson": geojson}
+    except (WorkoutException, WorkoutGPXException) as e:
+        appLog.error(e.message)
+        if e.status == "not found":
+            return NotFoundErrorResponse(e.message)
+        return InternalServerErrorResponse(e.message)
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+    return {
+        "status": "success",
+        "message": "",
+        "data": data,
+    }
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/gpx", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_workout_gpx(
+    auth_user: Optional[User], workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    [REMOVED] Get gpx file for a workout displayed on map with Leaflet
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/gpx HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 410 GONE
+      Content-Type: application/json
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 410: GONE
+    """
+    return GoneResponse()
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/chart_data", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_workout_chart_data(
+    auth_user: Optional[User], workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get chart data to display it with Chart.js.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/chart HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "chart_data": [
+            {
+              "distance": 0,
+              "duration": 0,
+              "elevation": 279.4,
+              "latitude": 51.5078118,
+              "longitude": -0.1232004,
+              "speed": 8.63,
+              "time": "Fri, 14 Jul 2017 13:44:03 GMT"
+            },
+            {
+              "distance": 7.5,
+              "duration": 7380,
+              "elevation": 280,
+              "latitude": 51.5079733,
+              "longitude": -0.1234538,
+              "speed": 6.39,
+              "time": "Fri, 14 Jul 2017 15:47:03 GMT"
+            }
+          ]
+        },
+        "message": "",
+        "status": "success"
+      }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404:
+        - ``workout not found``
+        - ``no gpx file for this workout``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    return get_workout_data(auth_user, workout_short_id, "chart_data")
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/gpx/segment/<int:segment_id>",
+    methods=["GET"],
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_segment_gpx(
+    auth_user: Optional[User], workout_short_id: str, segment_id: int
+) -> Union[Dict, HttpResponse]:
+    """
+    [REMOVED] Get gpx file for a workout segment displayed on map with Leaflet.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/gpx/segment/1 HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 410 GONE
+      Content-Type: application/json
+
+    :param string workout_short_id: workout short id
+    :param integer segment_id: segment id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 410: GONE
+    """
+    return GoneResponse()
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/chart_data/segment/<string:segment_short_id>",
+    methods=["GET"],
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_segment_chart_data(
+    auth_user: Optional[User], workout_short_id: str, segment_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get chart data from a workout gpx file, to display it with Chart.js.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/chart/segment/C4asMMbRJsxTirSjTVWeWU HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "chart_data": [
+            {
+              "distance": 0,
+              "duration": 0,
+              "elevation": 279.4,
+              "latitude": 51.5078118,
+              "longitude": -0.1232004,
+              "speed": 8.63,
+              "time": "Fri, 14 Jul 2017 13:44:03 GMT"
+            },
+            {
+              "distance": 7.5,
+              "duration": 7380,
+              "elevation": 280,
+              "latitude": 51.5079733,
+              "longitude": -0.1234538,
+              "speed": 6.39,
+              "time": "Fri, 14 Jul 2017 15:47:03 GMT"
+            }
+          ]
+        },
+        "message": "",
+        "status": "success"
+      }
+
+    :param string workout_short_id: workout short id
+    :param string segment_short_id: segment short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 200: ``success``
+    :statuscode 400: ``no gpx file for this workout``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    return get_workout_data(
+        auth_user, workout_short_id, "chart_data", segment_short_id
+    )
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/geojson", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_workout_geojson(
+    auth_user: Optional[User], workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get workout GeoJSON when segments have geometry.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/geojson HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "geojson": {
+            "type": "MultiLineString",
+            "coordinates": [
+              [
+                [6.07367, 44.68095],
+                [6.07367, 44.68091],
+                [6.07364, 44.6808],
+                [6.07361, 44.68049]
+              ],
+              [
+                [6.07361, 44.68049],
+                [6.07364, 44.6808],
+                [6.07367, 44.68091],
+                [6.07367, 44.68095]
+              ]
+            ]
+          }
+        },
+        "message": "",
+        "status": "success"
+      }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404:
+        - ``workout not found``
+        - ``geojson not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    return get_workout_data(auth_user, workout_short_id, "geojson")
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/geojson/segment/<string:segment_short_id>",
+    methods=["GET"],
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+def get_segment_geojson(
+    auth_user: Optional[User], workout_short_id: str, segment_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get workout segment GeoJSON, when segment has geometry
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/geojson/segment/C4asMMbRJsxTirSjTVWeWU HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+      {
+        "data": {
+          "geojson": {
+            "type": "LineString",
+            "coordinates": [
+              [6.07367, 44.68095],
+              [6.07367, 44.68091],
+              [6.07364, 44.6808],
+              [6.07361, 44.68049]
+            ]
+          }
+        },
+        "message": "",
+        "status": "success"
+      }
+
+    :param string workout_short_id: workout short id
+    :param string segment_short_id: segment short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` map visibility
+
+    :statuscode 200: ``success``
+    :statuscode 400: ``no gpx file for this workout``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404:
+        - ``workout not found``
+        - ``geojson not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+    """
+    return get_workout_data(
+        auth_user, workout_short_id, "geojson", segment_short_id
+    )
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/gpx/download", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"])
+def download_workout_gpx(
+    auth_user: User, workout_short_id: str
+) -> Union[HttpResponse, Response]:
+    """
+    Download gpx file (original or generated by FitTrackee).
+
+    **Scope**: ``workouts:read``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/gpx/download HTTP/1.1
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/gpx+xml
+
+    :param string workout_short_id: workout short id
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404:
+        - ``workout not found``
+        - ``no file for workout``
+    """
+    return download_workout_file(workout_short_id, auth_user.id, as_gpx=True)
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/original/download",
+    methods=["GET"],
+)
+@require_auth(scopes=["workouts:read"])
+def download_workout_original_file(
+    auth_user: User, workout_short_id: str
+) -> Union[HttpResponse, Response]:
+    """
+    Download original file (gpx, kml, tcx or fit file).
+
+    **Scope**: ``workouts:read``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/original/download HTTP/1.1
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/gpx+xml
+
+    :param string workout_short_id: workout short id
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404:
+        - ``workout not found``
+        - ``no original file for workout``
+    """
+    return download_workout_file(workout_short_id, auth_user.id)
+
+
+@workouts_blueprint.route("/workouts/map/<map_id>", methods=["GET"])
+@limiter.exempt
+def get_map(map_id: int) -> Union[HttpResponse, Response]:
+    """
+    Get map image for workouts with gpx.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/map/fa33f4d996844a5c73ecd1ae24456ab8?1563529507772
+        HTTP/1.1
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: image/png
+
+    :param string map_id: workout map id
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``map does not exist``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    try:
+        workout = Workout.query.filter_by(map_id=map_id).first()
+        if not workout:
+            return NotFoundErrorResponse("Map does not exist.")
+        return send_from_directory(
+            current_app.config["UPLOAD_FOLDER"],
+            workout.map,
+        )
+    except NotFound:
+        return NotFoundErrorResponse("Map file does not exist.")
+    except Exception as e:
+        return handle_error_and_return_response(e)
+
+
+@workouts_blueprint.route(
+    "/workouts/map_tile/<s>/<z>/<x>/<y>.png", methods=["GET"]
+)
+@limiter.exempt
+def get_map_tile(
+    s: str, z: str, x: str, y: str
+) -> Union[Tuple[Response, int], "HttpResponse"]:
+    """
+    Get map tile from tile server.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/map_tile/c/13/4109/2930.png HTTP/1.1
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: image/png
+
+    :param string s: subdomain
+    :param string z: zoom
+    :param string x: index of the tile along the map's x axis
+    :param string y: index of the tile along the map's y axis
+
+    Status codes are status codes returned by tile server
+
+    """
+    default_tile_provider = current_app.config.get(
+        "default_tile_provider", DEFAULT_TILE_PROVIDER
+    )
+    params = request.args.copy()
+    tile_provider = params.get("tile_provider", default_tile_provider)
+
+    if tile_provider not in current_app.config["available_tile_providers"]:
+        return InvalidPayloadErrorResponse(
+            f"tile provider '{tile_provider}' is not available"
+        )
+
+    url = current_app.config["available_tile_providers"][
+        tile_provider
+    ].url.format(
+        s=secure_filename(s),
+        z=secure_filename(z),
+        x=secure_filename(x),
+        y=secure_filename(y),
+    )
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:88.0)"}
+    response = requests.get(url, headers=headers, timeout=30)
+    return (
+        Response(
+            response.content,
+            content_type=response.headers["content-type"],
+            headers=get_tile_response_headers(response.headers),
+        ),
+        response.status_code,
+    )
+
+
+@workouts_blueprint.route("/workouts", methods=["POST"])
+@require_auth(scopes=["workouts:write"])
+def post_workout(auth_user: User) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Post a workout with a file.
+
+    **Notes**: Media attachments are ignored when provided with an archive.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/ HTTP/1.1
+      Content-Type: multipart/form-data
+
+    **Example response**:
+
+    - when upload is synchronous
+
+    .. sourcecode:: http
+
+      HTTP/1.1 201 CREATED
+      Content-Type: application/json
+
+        {
+          "data": {
+            "errored_workouts": [],
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": 435.621,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 13.14,
+                "best_pace": null,
+                "bounds": [
+                  43.93706,
+                  4.517587,
+                  43.981933,
+                  4.560627
+                ],
+                "creation_date": "Sun, 14 Jul 2019 13:51:01 GMT",
+                "descent": 427.499,
+                "description": null,
+                "distance": 23.478,
+                "duration": "2:08:35",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "PsjeeXbJZ2JJNQcTCPxVvF",
+                "liked": false,
+                "likes_count": 0,
+                "map": "ac075ec36dc25dcc20c270d2005f0398",
+                "map_visibility": "private",
+                "max_alt": 158.41,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 25.59,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": 55.03,
+                "modification_date": null,
+                "moving": "1:47:11",
+                "next_workout": "Kd5wyhwLtVozw6o3AU5M4J",
+                "notes": "",
+                "pauses": "0:20:32",
+                "previous_workout": "HgzYFXgvWKCEpdq3vYk67q",
+                "records": [
+                  {
+                    "id": 6,
+                    "record_type": "AS",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 13.14,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 7,
+                    "record_type": "FD",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 23.478,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 9,
+                    "record_type": "LD",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": "1:47:11",
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 10,
+                    "record_type": "MS",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 25.59,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 8,
+                    "record_type": "HA",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 435.621,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  }
+                ],
+                "segments": [
+                  {
+                    "ascent": 435.621,
+                    "ave_cadence": null,
+                    "ave_hr": null,
+                    "ave_pace": null,
+                    "ave_power": null,
+                    "ave_speed": 13.14,
+                    "descent": 427.499,
+                    "distance": 23.478,
+                    "duration": "2:08:35",
+                    "max_alt": 158.41,
+                    "max_cadence": null,
+                    "max_hr": null,
+                    "best_pace": null,
+                    "max_power": null,
+                    "max_speed": 25.59,
+                    "min_alt": 55.03,
+                    "moving": "1:47:11",
+                    "pauses": "0:20:32",
+                    "segment_id": 0,
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  }
+                ],
+                "sport_id": 4,
+                "stats_from_file": false,
+                "suspended": false,
+                "suspended_at": null,
+                "title": "VTT dans le Gard",
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 3,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": true,
+                "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    - when upload is asynchronous
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 SUCCESS
+      Content-Type: application/json
+
+        {
+          "data": {
+            "task_id": "JKtd4tpQDgAPwNTsjjPdVh"
+          },
+          "status": "in_progress"
+        }
+
+    :form file: workout file or archive (allowed extensions: .gpx, .kml, .kmz,
+       .fit, .tcx, .zip)
+    :form data: sport id, equipment id, description, title, notes, visibility
+       for workout, analysis and map, media attachments ids
+       for example:
+       ``{"sport_id": 1, "notes": "", "title": "", "description": "",
+       "analysis_visibility": "private", "map_visibility": "private",
+       "workout_visibility": "private", "equipment_ids": [],
+       "media_visibility": "private", "media_attachment_ids": []}``.
+       Double quotes in notes, description and title must be escaped.
+
+       The maximum length is 500 characters for notes, 10000 characters for
+       description and 255 for title. Otherwise, they will be truncated.
+       When description and title are provided, they replace the description
+       and title from gpx file.
+
+       For `equipment_ids`, the id of the equipment to associate with
+       this workout.
+       **Note**: Only one piece of equipment per type can be added to a
+       workout, with the exception of the "Misc" type, for which up to 5
+       pieces of equipment can be added.
+       If not provided and default equipment exists for sport,
+       default equipment will be associated.
+
+       Up to 20 media items can be associated.
+
+       Notes, description, title, equipment ids, media attachment ids and
+       visibility for workout, analysis, map and media are not mandatory.
+       Visibility levels default to user preferences.
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: archive upload in progress
+    :statuscode 201: workout created
+    :statuscode 400:
+        - ``invalid payload``
+        - ``no file part``
+        - ``no selected file``
+        - ``file extension not allowed``
+        - ``invalid file``
+        - ``error when parsing fit file``
+        - ``error when parsing gpx file``
+        - ``error when parsing kml file``
+        - ``error when parsing kmz file``
+        - ``error when parsing tcx file``
+        - ``error when generating map image``
+        - ``gpx file is invalid``
+        - ``no activities in tcx file``
+        - ``no coordinates in tcx file``
+        - ``no laps or no tracks in tcx file``
+        - ``no tracks in gpx file``
+        - ``no tracks in kml file``
+        - ``<time> is missing in gpx file``
+        - ``unsupported kml file``
+        - ``no valid segments in file``
+        - ``no valid segments with GPS found in fit file``
+        - ``equipment_ids must be an array of strings``
+        - ``only one piece of equipment per type can be provided``
+        - ``a maximum of 5 pieces of 'Misc' equipment can be added``
+        - ``equipment with id <equipment_id> does not exist``
+        - ``invalid equipment id <equipment_id> for sport``
+        - ``equipment with id <equipment_id> is inactive``
+        - ``one or more values, entered or calculated, exceed the limits``
+        - ``up to 20 media attachments can be associated with a workout``
+        - ``media attachments can not be associated with a .zip archive``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 413: ``error during picture update: file size exceeds 1.0MB``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    try:
+        error_response = get_error_response_if_file_is_invalid(
+            "workout", request
+        )
+    except RequestEntityTooLarge as e:
+        appLog.error(e)
+        return PayloadTooLargeErrorResponse(
+            file_type="workout",
+            file_size=request.content_length,
+            max_size=current_app.config["max_zip_file_size"],
+        )
+    if error_response:
+        return error_response
+
+    try:
+        workout_data = json.loads(request.form["data"], strict=False)
+    except json.decoder.JSONDecodeError:
+        return InvalidPayloadErrorResponse()
+
+    if not workout_data or workout_data.get("sport_id") is None:
+        return InvalidPayloadErrorResponse()
+
+    workout_file = request.files["file"]
+    is_zip_archive = (
+        workout_file is not None
+        and workout_file.filename is not None
+        and workout_file.filename.endswith(".zip")
+    )
+    error_response = check_media_attachments(workout_data, is_zip_archive)
+    if error_response:
+        return error_response
+
+    try:
+        check_file(workout_file, WORKOUT_FILE_DETECTED_MIMETYPES)
+
+        service = WorkoutsFromFileCreationService(
+            auth_user, workout_data, workout_file
+        )
+        new_workouts, processing_output = service.process()
+        if processing_output["task_short_id"]:
+            return {
+                "status": "in_progress",
+                "data": {"task_id": processing_output["task_short_id"]},
+            }, 200
+
+        if len(new_workouts) > 0 and not processing_output["errored_workouts"]:
+            response_object = {
+                "status": "created",
+                "data": {
+                    "workouts": [
+                        new_workout.serialize(user=auth_user, light=False)
+                        for new_workout in new_workouts
+                    ],
+                },
+            }
+        else:
+            return {
+                "status": "fail",
+                "new_workouts": len(new_workouts),
+                "errored_workouts": processing_output["errored_workouts"],
+            }, 400
+    except FileException as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except WorkoutExceedingValueException as e:
+        appLog.error(e.detail)
+        return ExceedingValueErrorResponse()
+    except InvalidEquipmentsException as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except InvalidEquipmentException as e:
+        return EquipmentInvalidPayloadErrorResponse(
+            equipment_id=e.equipment_id, message=e.message, status=e.status
+        )
+    except (WorkoutException, WorkoutFileException) as e:
+        db.session.rollback()
+        if e.status == "error":
+            appLog.exception("Error when creating workout")
+            return InternalServerErrorResponse(e.message)
+        return InvalidPayloadErrorResponse(e.message, e.status)
+    return response_object, 201
+
+
+@workouts_blueprint.route("/workouts/no_gpx", methods=["POST"])
+@require_auth(scopes=["workouts:write"])
+def post_workout_no_gpx(
+    auth_user: User,
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Post a workout without gpx file.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/no_gpx HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 201 CREATED
+      Content-Type: application/json
+
+       {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": null,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 10.0,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Sun, 14 Jul 2019 13:51:01 GMT",
+                "descent": null,
+                "description": null,
+                "distance": 10.0,
+                "duration": "0:17:04",
+                "id": "Kd5wyhwLtVozw6o3AU5M4J",
+                "liked": false,
+                "likes_count": 0,
+                "elevation_data_source": "file",
+                "equipments": [],
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": null,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 10.0,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": null,
+                "modification_date": null,
+                "moving": "0:17:04",
+                "next_workout": 3,
+                "notes": null,
+                "pauses": null,
+                "previous_workout": null,
+                "records": [
+                  {
+                    "id": 4,
+                    "record_type": "MS",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  },
+                  {
+                    "id": 3,
+                    "record_type": "LD",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": "0:17:04",
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  },
+                  {
+                    "id": 2,
+                    "record_type": "FD",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.0,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  },
+                  {
+                    "id": 1,
+                    "record_type": "AS",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.0,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  }
+                ],
+                "segments": [],
+                "sport_id": 1,
+                "stats_from_file": false,
+                "suspended": false,
+                "suspended_at": null,
+                "title": null,
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "uuid": "kjxavSTUrJvoAh2wvCeGEF"
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :<json float ascent: workout ascent (not mandatory,
+           must be provided with descent)
+    :<json float descent: workout descent (not mandatory,
+           must be provided with ascent)
+    :<json string description: workout description (not mandatory,
+           max length: 10000 characters, otherwise it will be truncated)
+    :<json float distance: workout distance in km
+    :<json integer duration: workout duration in seconds
+    :<json array of strings equipment_ids:
+        the id of the equipment to associate with this workout.
+        **Note**: Only one piece of equipment per type can be added to a
+        workout, with the exception of the "Misc" type, for which up to 5
+        pieces of equipment can be added.
+        If not provided and default equipment exists for sport,
+        default equipment will be associated.
+    :<json array of strings media_attachment_ids: the id of uploaded media
+        attachments. Up to 20 media items can be associated.
+    :<json string media_visibility: media visibility (``private``,
+        ``followers_only`` or ``public``). Not mandatory,
+        defaults to user preferences.
+    :<json string notes: notes (not mandatory, max length: 500
+        characters, otherwise they will be truncated)
+    :<json integer sport_id: workout sport id
+    :<json string title: workout title (not mandatory, max length: 255
+        characters, otherwise it will be truncated)
+    :<json string workout_date: workout date, in user timezone
+        (format: ``%Y-%m-%d %H:%M``)
+    :<json string workout_visibility: workout visibility (``private``,
+        ``followers_only`` or ``public``). Not mandatory,
+        defaults to user preferences.
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 201: workout created
+    :statuscode 400:
+        - ``invalid payload``
+        - ``equipment_ids must be an array of strings``
+        - ``only one piece of equipment per type can be provided``
+        - ``a maximum of 5 pieces of 'Misc' equipment can be added``
+        - ``equipment with id <equipment_id> does not exist``
+        - ``invalid equipment id <equipment_id> for sport``
+        - ``equipment with id <equipment_id> is inactive``
+        - ``one or more values, entered or calculated, exceed the limits``
+        - ``up to 20 media attachments can be associated with a workout``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    workout_data = request.get_json()
+    if (
+        not workout_data
+        or not workout_data.get("sport_id")
+        or not workout_data.get("duration")
+        or not workout_data.get("distance")
+        or not workout_data.get("workout_date")
+    ):
+        return InvalidPayloadErrorResponse()
+
+    error_response = check_media_attachments(workout_data)
+    if error_response:
+        return error_response
+
+    try:
+        service = WorkoutCreationService(auth_user, workout_data)
+        [new_workout], _ = service.process()
+        db.session.commit()
+
+        return (
+            {
+                "status": "created",
+                "data": {
+                    "workouts": [
+                        new_workout.serialize(user=auth_user, light=False)
+                    ]
+                },
+            },
+            201,
+        )
+    except WorkoutExceedingValueException as e:
+        appLog.error(e.detail)
+        return ExceedingValueErrorResponse()
+    except InvalidEquipmentsException as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except InvalidEquipmentException as e:
+        return EquipmentInvalidPayloadErrorResponse(
+            equipment_id=e.equipment_id, message=e.message, status=e.status
+        )
+    except WorkoutException as e:
+        db.session.rollback()
+        if e.e:
+            appLog.error(e.e)
+        if e.status == "error":
+            return InternalServerErrorResponse(e.message)
+        return InvalidPayloadErrorResponse(e.message, e.status)
+    except (exc.IntegrityError, ValueError) as e:
+        return handle_error_and_return_response(
+            error=e,
+            message="Error during workout save.",
+            status="fail",
+            db=db,
+        )
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>", methods=["PATCH"]
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout()
+def update_workout(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Update a workout.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      PATCH /api/workouts/2oRDfncv6vpRkfp3yrCYHt HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+       {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": null,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 10.0,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Sun, 14 Jul 2019 13:51:01 GMT",
+                "descent": null,
+                "description": null,
+                "distance": 10.0,
+                "duration": "0:17:04",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "2oRDfncv6vpRkfp3yrCYHt",
+                "liked": false,
+                "likes_count": 0,
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": null,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 10.0,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": null,
+                "modification_date": null,
+                "moving": "0:17:04",
+                "next_workout": 3,
+                "notes": null,
+                "pauses": null,
+                "previous_workout": null,
+                "records": [
+                  {
+                    "id": 4,
+                    "record_type": "MS",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.0,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  },
+                  {
+                    "id": 3,
+                    "record_type": "LD",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": "0:17:04",
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF"
+                  },
+                  {
+                    "id": 2,
+                    "record_type": "FD",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.0,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF",
+                  },
+                  {
+                    "id": 1,
+                    "record_type": "AS",
+                    "sport_id": 1,
+                    "user": "admin",
+                    "value": 10.0,
+                    "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                    "workout_id": "kjxavSTUrJvoAh2wvCeGEF",
+                  }
+                ],
+                "segments": [],
+                "sport_id": 1,
+                "stats_from_file": false,
+                "suspended": false,
+                "suspended_at": null,
+                "title": null,
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "uuid": "kjxavSTUrJvoAh2wvCeGEF"
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Mon, 01 Jan 2018 00:00:00 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :<json string analysis_visibility: analysis visibility
+        (``private``, ``followers_only`` or ``public``)
+    :<json float ascent: workout ascent
+        (only for workout without gpx, must be provided with descent)
+    :<json float descent: workout descent
+        (only for workout without gpx, must be provided with ascent)
+    :<json string description: workout description (max length: 10000
+        characters, otherwise it will be truncated)
+    :<json float distance: workout distance in km
+        (only for workout without gpx)
+    :<json integer duration: workout duration in seconds
+        (only for workout without gpx)
+    :<json string elevation_data_source: elevation data source
+              depending on application configuration (``file``,
+              ``open_elevation````valhalla``). Must be provided with
+              'elevation_processing'
+    :<json string elevation_processing: method used when processing elevations
+              (``none``, ``flat_window``). Must be provided with
+              'elevation_data_source'.
+    :<json array of strings equipment_ids:
+        the id of the equipment to associate with this workout (any existing
+        equipment for this workout will be replaced).
+        **Note**: Only one piece of equipment per type can be added to a
+        workout, with the exception of the "Misc" type, for which up to 5
+        pieces of equipment can be added.
+        If an empty array, equipment for this workout will be removed.
+    :<json string map_visibility: map visibility
+        (``private``, ``followers_only`` or ``public``)
+    :<json array of strings media_attachment_ids: the id of uploaded media
+        attachments. Up to 20 media items can be associated.
+    :<json string media_visibility: media visibility (``private``,
+        ``followers_only`` or ``public``)
+    :<json string notes: notes (max length: 500 characters, otherwise they
+        will be truncated)
+    :<json integer sport_id: workout sport id
+    :<json string title: workout title (max length: 255 characters, otherwise
+        it will be truncated)
+    :<json string workout_date: workout date in user timezone
+        (format: ``%Y-%m-%d %H:%M``)
+        (only for workout without gpx)
+    :<json string workout_visibility: workout visibility (``private``,
+        ``followers_only`` or ``public``)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: workout updated
+    :statuscode 400:
+        - ``invalid payload``
+        - ``equipment_ids must be an array of strings``
+        - ``only one piece of equipment per type can be provided``
+        - ``a maximum of 5 pieces of 'Misc' equipment can be added``
+        - ``equipment with id <equipment_id> does not exist``
+        - ``invalid equipment id <equipment_id> for sport``
+        - ``equipment with id <equipment_id> is inactive``
+        - ``one or more values, entered or calculated, exceed the limits``
+        - ``'elevation_data_source' can not be provided for workout without file``
+        - ``'<ELEVATION_DATA_SOURCE>' as elevation data source is not valid``
+        - ``'elevation_data_source' and 'elevation_processing' must be provided together``
+        - ``up to 20 media attachments can be associated with a workout``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    workout_data = request.get_json()
+    if not workout_data:
+        return InvalidPayloadErrorResponse()
+    if "elevation_data_source" in workout_data and not workout.original_file:
+        return InvalidPayloadErrorResponse(
+            "'elevation_data_source' can not be provided "
+            "for workout without file"
+        )
+    if (
+        "elevation_data_source" in workout_data
+        and "elevation_processing" not in workout_data
+    ) or (
+        "elevation_processing" in workout_data
+        and "elevation_data_source" not in workout_data
+    ):
+        return InvalidPayloadErrorResponse(
+            "'elevation_data_source' and 'elevation_processing' must be "
+            "provided together"
+        )
+
+    error_response = check_media_attachments(workout_data)
+    if error_response:
+        return error_response
+
+    try:
+        old_sport_id = workout.sport_id
+        new_sport_id = workout_data.get("sport_id")
+        service = WorkoutUpdateService(auth_user, workout, workout_data)
+        service.update()
+
+        if "elevation_data_source" in workout_data:
+            if workout_data["elevation_processing"] not in [
+                item.value for item in ElevationProcessing
+            ]:
+                return InvalidPayloadErrorResponse(
+                    f"'{workout_data['elevation_processing']}' as elevation "
+                    f"processing is not valid"
+                )
+            elevation_service = ElevationService(
+                workout_data["elevation_data_source"],
+                workout_data["elevation_processing"],
+            )
+            if (
+                workout_data["elevation_data_source"]
+                != ElevationDataSource.FILE
+                and not elevation_service.elevation_service
+            ):
+                return InvalidPayloadErrorResponse(
+                    f"'{workout_data['elevation_data_source']}' as elevation "
+                    f"data source is not valid"
+                )
+            db.session.flush()
+            refresh_service = WorkoutFromFileRefreshService(
+                workout,
+                update_weather=False,
+                get_elevation_on_refresh=True,
+                change_elevation_source=workout_data["elevation_data_source"],
+                elevation_processing=workout_data["elevation_processing"],
+            )
+            refresh_service.refresh()
+        elif (
+            workout.original_file
+            and new_sport_id is not None
+            and new_sport_id != old_sport_id
+        ):
+            db.session.flush()
+            db.session.refresh(workout)
+            refresh_service = WorkoutFromFileRefreshService(
+                workout,
+                update_weather=False,
+                get_elevation_on_refresh=False,
+            )
+            refresh_service.refresh()
+
+        db.session.commit()
+
+        return {
+            "status": "success",
+            "data": {
+                "workouts": [workout.serialize(user=auth_user, light=False)]
+            },
+        }
+    except WorkoutExceedingValueException as e:
+        appLog.error(e.detail)
+        return ExceedingValueErrorResponse()
+    except (InvalidEquipmentsException, WorkoutElevationException) as e:
+        return InvalidPayloadErrorResponse(str(e))
+    except InvalidEquipmentException as e:
+        return EquipmentInvalidPayloadErrorResponse(
+            equipment_id=e.equipment_id, message=e.message, status=e.status
+        )
+    except WorkoutException as e:
+        db.session.rollback()
+        if e.e:
+            appLog.error(e.e)
+        if e.status == "error":
+            return InternalServerErrorResponse(e.message)
+        return InvalidPayloadErrorResponse(e.message, e.status)
+    except (exc.IntegrityError, exc.OperationalError, ValueError) as e:
+        return handle_error_and_return_response(e)
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>", methods=["DELETE"]
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout()
+def delete_workout(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Delete a workout.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      DELETE /api/workouts/kjxavSTUrJvoAh2wvCeGEF HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 204 NO CONTENT
+      Content-Type: application/json
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 204: workout deleted
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    try:
+        # update equipments totals
+        workout.equipments = []
+        db.session.flush()
+
+        for media in Media.query.filter_by(workout_id=workout.id).all():
+            db.session.delete(media)  # to delete media files
+        db.session.delete(workout)
+        db.session.commit()
+        return {"status": "no content"}, 204
+    except (
+        exc.IntegrityError,
+        exc.OperationalError,
+        ValueError,
+        OSError,
+    ) as e:
+        return handle_error_and_return_response(e, db=db)
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/like", methods=["POST"]
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout(only_owner=False)
+def like_workout(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Add a "like" to a workout.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/HgzYFXgvWKCEpdq3vYk67q/like HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": 231.208,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 13.12,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Wed, 04 Dec 2024 09:18:26 GMT",
+                "descent": 234.208,
+                "description": null,
+                "distance": 23.41,
+                "duration": "3:32:27",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "HgzYFXgvWKCEpdq3vYk67q",
+                "liked": true,
+                "likes_count": 1,
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": 104.44,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 25.59,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": 19.0,
+                "modification_date": "Wed, 04 Dec 2024 16:45:14 GMT",
+                "moving": "1:47:04",
+                "next_workout": null,
+                "notes": null,
+                "pauses": "1:23:51",
+                "previous_workout": null,
+                "records": [],
+                "segments": [],
+                "sport_id": 1,
+                "suspended": false,
+                "title": "Cycling (Sport) - 2016-04-26 16:42:27",
+                "user": {
+                  "created_at": "Sun, 24 Nov 2024 16:52:14 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Tue, 26 Apr 2016 14:42:27 GMT",
+                "workout_visibility": "public"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``comment not found``
+    """
+    try:
+        like = WorkoutLike(user_id=auth_user.id, workout_id=workout.id)
+        db.session.add(like)
+        db.session.commit()
+
+    except IntegrityError:
+        db.session.rollback()
+    return {
+        "status": "success",
+        "data": {"workouts": [workout.serialize(user=auth_user, light=False)]},
+    }, 200
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/like/undo", methods=["POST"]
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout(only_owner=False)
+def undo_workout_like(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Remove workout "like".
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/HgzYFXgvWKCEpdq3vYk67q/like/undo HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": 231.208,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 13.12,
+                "best_pace": null,
+                "bounds": [],
+                "creation_date": "Wed, 04 Dec 2024 09:18:26 GMT",
+                "descent": 234.208,
+                "description": null,
+                "distance": 23.41,
+                "duration": "3:32:27",
+                "elevation_data_source": "file",
+                "equipments": [],
+                "id": "HgzYFXgvWKCEpdq3vYk67q",
+                "liked": false,
+                "likes_count": 0,
+                "map": null,
+                "map_visibility": "private",
+                "max_alt": 104.44,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 25.59,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": 19.0,
+                "modification_date": "Wed, 04 Dec 2024 16:45:14 GMT",
+                "moving": "1:47:04",
+                "next_workout": null,
+                "notes": null,
+                "pauses": "1:23:51",
+                "previous_workout": null,
+                "records": [],
+                "segments": [],
+                "sport_id": 1,
+                "suspended": false,
+                "title": "Cycling (Sport) - 2016-04-26 16:42:27",
+                "user": {
+                  "created_at": "Sun, 24 Nov 2024 16:52:14 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 1,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": false,
+                "workout_date": "Tue, 26 Apr 2016 14:42:27 GMT",
+                "workout_visibility": "public"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``comment not found``
+    """
+    like = WorkoutLike.query.filter_by(
+        user_id=auth_user.id, workout_id=workout.id
+    ).first()
+    if like:
+        db.session.delete(like)
+        db.session.commit()
+
+    return {
+        "status": "success",
+        "data": {"workouts": [workout.serialize(user=auth_user, light=False)]},
+    }, 200
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/likes", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"], optional_auth_user=True)
+@check_workout(only_owner=False)
+def get_workout_likes(
+    auth_user: Optional[User], workout: Workout, workout_short_id: str
+) -> Union[Dict, HttpResponse]:
+    """
+    Get users who like the workout.
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/kjxavSTUrJvoAh2wvCeGEF/likes HTTP/1.1
+
+    **Example responses**:
+
+    - success:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+
+        {
+          "data": {
+            "likes": [
+              {
+                "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                "followers": 0,
+                "following": 0,
+                "nb_workouts": 1,
+                "picture": false,
+                "role": "user",
+                "suspended_at": null,
+                "username": "Sam"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    - workout not found:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 404 NOT FOUND
+      Content-Type: application/json
+
+        {
+          "data": {
+            "likes": []
+          },
+          "status": "not found"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :query integer page: page if using pagination (default: 1)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token for workout with
+               ``private`` or ``followers_only`` visibility
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions``
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+
+    """
+    params = request.args.copy()
+    page = int(params.get("page", 1))
+    likes_pagination = (
+        User.query.join(WorkoutLike, User.id == WorkoutLike.user_id)
+        .filter(WorkoutLike.workout_id == workout.id)
+        .order_by(WorkoutLike.created_at.desc())
+        .paginate(
+            page=page, per_page=DEFAULT_WORKOUT_LIKES_PER_PAGE, error_out=False
+        )
+    )
+    users = likes_pagination.items
+    return {
+        "status": "success",
+        "data": {
+            "likes": [user.serialize(current_user=auth_user) for user in users]
+        },
+        "pagination": {
+            "has_next": likes_pagination.has_next,
+            "has_prev": likes_pagination.has_prev,
+            "page": likes_pagination.page,
+            "pages": likes_pagination.pages,
+            "total": likes_pagination.total,
+        },
+    }
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/suspension/appeal",
+    methods=["POST"],
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout(only_owner=True)
+def appeal_workout_suspension(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Appeal workout suspension.
+
+    Only workout author can appeal the suspension.
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/2oRDfncv6vpRkfp3yrCYHt/suspension/appeal HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 201 CREATED
+      Content-Type: application/json
+
+        {
+          "status": "success"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 201: appeal created
+    :statuscode 400:
+        - ``no text provided``
+        - ``you can appeal only once``
+        - ``workout is not suspended``
+        - ``workout has no suspension``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403: ``you do not have permissions``
+    :statuscode 404: ``workout not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+    """
+    if not workout.suspended_at:
+        return InvalidPayloadErrorResponse("workout is not suspended")
+    suspension_action = workout.suspension_action
+    if not suspension_action:
+        return InvalidPayloadErrorResponse("workout has no suspension")
+
+    text = request.get_json().get("text")
+    if not text:
+        return InvalidPayloadErrorResponse("no text provided")
+
+    try:
+        appeal = ReportActionAppeal(
+            action_id=suspension_action.id, user_id=auth_user.id, text=text
+        )
+        db.session.add(appeal)
+        db.session.commit()
+        return {"status": "success"}, 201
+
+    except exc.IntegrityError:
+        return InvalidPayloadErrorResponse("you can appeal only once")
+    except (exc.OperationalError, ValueError) as e:
+        return handle_error_and_return_response(e, db=db)
+
+
+@workouts_blueprint.route("/workouts/upload-tasks", methods=["GET"])
+@require_auth(scopes=["workouts:read"])
+def get_workouts_upload_tasks(
+    auth_user: User,
+) -> Tuple[Dict, int]:
+    """
+    Get user tasks for workouts archive upload
+
+    **Scope**: ``workouts:read``
+
+    **Example request**:
+
+    - without parameters:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/tasks HTTP/1.1
+      Content-Type: application/json
+
+    - with 'page' parameter:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/tasks?page=2 HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 SUCCESS
+      Content-Type: application/json
+
+      {
+        "data": {
+          "tasks": [
+            {
+              "created_at": "Sun, 30 Mar 2025 10:26:17 GMT",
+              "errored_files": {},
+              "files_count": 10,
+              "id": "JEiR6cDcADX8bZ6ZeQssnr",
+              "progress": 10,
+              "status": "in_progress",
+              "type": "workouts_archive_upload"
+            }
+          ]
+        },
+        "pagination": {
+          "has_next": false,
+          "has_prev": false,
+          "page": 1,
+          "pages": 1,
+          "total": 1
+        },
+        "status": "success"
+      }
+
+    :query integer page: page for pagination (default: 1)
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    """
+    params = request.args.copy()
+    page = int(params.get("page", 1))
+    per_page = DEFAULT_TASKS_PER_PAGE
+    tasks_pagination = (
+        UserTask.query.filter_by(
+            user_id=auth_user.id, task_type="workouts_archive_upload"
+        )
+        .order_by(UserTask.created_at.desc())
+        .paginate(page=page, per_page=per_page, error_out=False)
+    )
+    return {
+        "status": "success",
+        "data": {
+            "tasks": [
+                task.serialize(current_user=auth_user)
+                for task in tasks_pagination.items
+            ]
+        },
+        "pagination": {
+            "has_next": tasks_pagination.has_next,
+            "has_prev": tasks_pagination.has_prev,
+            "page": tasks_pagination.page,
+            "pages": tasks_pagination.pages,
+            "total": tasks_pagination.total,
+        },
+    }, 200
+
+
+@workouts_blueprint.route(
+    "/workouts/upload-tasks/<string:task_short_id>", methods=["GET"]
+)
+@require_auth(scopes=["workouts:read"])
+def get_workouts_upload_task(
+    auth_user: User, task_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Get a given task for workouts archive upload
+
+    **Scope**: ``workouts:read``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      GET /api/workouts/tasks/JEiR6cDcADX8bZ6ZeQssnr HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 SUCCESS
+      Content-Type: application/json
+
+      {
+        "task": {
+          "created_at": "Sun, 30 Mar 2025 10:26:17 GMT",
+          "errored_files": {},
+          "files_count": 10,
+          "id": "JEiR6cDcADX8bZ6ZeQssnr",
+          "progress": 10,
+          "status": "in_progress",
+          "type": "workouts_archive_upload"
+        },
+        "status": "success"
+      }
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 404:
+        - ``no task found``
+    """
+    task = UserTask.query.filter_by(
+        user_id=auth_user.id, uuid=decode_short_id(task_short_id)
+    ).first()
+
+    if not task or task.task_type != "workouts_archive_upload":
+        return NotFoundErrorResponse("no task found")
+
+    return {
+        "status": "success",
+        "task": task.serialize(current_user=auth_user),
+    }, 200
+
+
+@workouts_blueprint.route(
+    "/workouts/upload-tasks/<string:task_short_id>/abort", methods=["POST"]
+)
+@require_auth(scopes=["workouts:write"])
+def abort_workouts_upload_task(
+    auth_user: User, task_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Abort ongoing task for workouts archive upload
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/tasks/JEiR6cDcADX8bZ6ZeQssnr/abort HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 SUCCESS
+      Content-Type: application/json
+
+      {
+        "task": {
+          "created_at": "Sun, 30 Mar 2025 10:26:17 GMT",
+          "errored_files": {},
+          "files_count": 10,
+          "id": "JEiR6cDcADX8bZ6ZeQssnr",
+          "progress": 10,
+          "status": "aborted",
+          "type": "workouts_archive_upload"
+        },
+        "status": "success"
+      }
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 400:
+        - ``only queued and ongoing tasks can be aborted``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 404:
+        - ``no task found``
+    :statuscode 500:
+        - ``error when aborting task``
+    """
+    task = UserTask.query.filter_by(
+        user_id=auth_user.id, uuid=decode_short_id(task_short_id)
+    ).first()
+
+    if not task or task.task_type != "workouts_archive_upload":
+        return NotFoundErrorResponse("no task found")
+
+    if task.status not in [
+        "in_progress",
+        "queued",
+    ]:
+        return InvalidPayloadErrorResponse(
+            "only queued and ongoing tasks can be aborted"
+        )
+
+    try:
+        if task.message_id:
+            abort(message_id=task.message_id, middleware=abortable)
+        task.aborted = True
+        db.session.commit()
+    except Exception as e:
+        appLog.exception(e)
+        return InternalServerErrorResponse("error when aborting task")
+
+    return {
+        "status": "success",
+        "task": task.serialize(current_user=auth_user),
+    }, 200
+
+
+@workouts_blueprint.route(
+    "/workouts/upload-tasks/<string:task_short_id>", methods=["DELETE"]
+)
+@require_auth(scopes=["workouts:read"])
+def delete_workouts_upload_task(
+    auth_user: User, task_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Delete workouts archive upload task if status is successful or errored
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      DELETE /api/workouts/tasks/JEiR6cDcADX8bZ6ZeQssnr HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 204 NO CONTENT
+      Content-Type: application/json
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: ``success``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 404:
+        - ``no task found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+    """
+    task = UserTask.query.filter_by(
+        user_id=auth_user.id, uuid=decode_short_id(task_short_id)
+    ).first()
+
+    if not task or task.task_type != "workouts_archive_upload":
+        return NotFoundErrorResponse("no task found")
+
+    if task.status in ["in_progress", "queued"]:
+        return InvalidPayloadErrorResponse(
+            "queued or ongoing workout upload task can not be deleted"
+        )
+
+    try:
+        db.session.delete(task)
+        db.session.commit()
+        return {"status": "no content"}, 204
+    except Exception as e:
+        return handle_error_and_return_response(e, db=db)
+
+
+@workouts_blueprint.route(
+    "/workouts/<string:workout_short_id>/refresh", methods=["POST"]
+)
+@require_auth(scopes=["workouts:write"])
+@check_workout(only_owner=True)
+def refresh_workout(
+    auth_user: User, workout: Workout, workout_short_id: str
+) -> Union[Tuple[Dict, int], HttpResponse]:
+    """
+    Refresh a workout (created by uploading a file):
+
+    - recalculate workout data like max. speed, pauses...
+    - update weather if weather provided is set and workout does not have
+      weather data
+
+    **Scope**: ``workouts:write``
+
+    **Example request**:
+
+    .. sourcecode:: http
+
+      POST /api/workouts/kjxavSTUrJvoAh2wvCeGEF/refresh HTTP/1.1
+      Content-Type: application/json
+
+    **Example response**:
+
+    .. sourcecode:: http
+
+      HTTP/1.1 200 SUCCESS
+      Content-Type: application/json
+
+        {
+          "data": {
+            "errored_workouts": [],
+            "workouts": [
+              {
+                "analysis_visibility": "private",
+                "ascent": 435.621,
+                "ave_cadence": null,
+                "ave_hr": null,
+                "ave_pace": null,
+                "ave_power": null,
+                "ave_speed": 13.14,
+                "best_pace": null,
+                "bounds": [
+                  43.93706,
+                  4.517587,
+                  43.981933,
+                  4.560627
+                ],
+                "creation_date": "Sun, 14 Jul 2019 13:51:01 GMT",
+                "descent": 427.499,
+                "description": null,
+                "distance": 23.478,
+                "duration": "2:08:35",
+                "equipments": [],
+                "id": "PsjeeXbJZ2JJNQcTCPxVvF",
+                "liked": false,
+                "likes_count": 0,
+                "map": "ac075ec36dc25dcc20c270d2005f0398",
+                "map_visibility": "private",
+                "max_alt": 158.41,
+                "max_cadence": null,
+                "max_hr": null,
+                "max_power": null,
+                "max_speed": 25.59,
+                "media_attachments": [],
+                "media_visibility": "private",
+                "min_alt": 55.03,
+                "elevation_data_source": "file",
+                "modification_date": null,
+                "moving": "1:47:11",
+                "next_workout": "Kd5wyhwLtVozw6o3AU5M4J",
+                "notes": "",
+                "pauses": "0:20:32",
+                "previous_workout": "HgzYFXgvWKCEpdq3vYk67q",
+                "records": [
+                  {
+                    "id": 6,
+                    "record_type": "AS",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 13.14,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 7,
+                    "record_type": "FD",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 23.478,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 9,
+                    "record_type": "LD",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": "1:47:11",
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 10,
+                    "record_type": "MS",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 25.59,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  },
+                  {
+                    "id": 8,
+                    "record_type": "HA",
+                    "sport_id": 4,
+                    "user": "Sam",
+                    "value": 435.621,
+                    "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  }
+                ],
+                "segments": [
+                  {
+                    "ascent": 435.621,
+                    "ave_cadence": null,
+                    "ave_hr": null,
+                    "ave_pace": null,
+                    "ave_power": null,
+                    "ave_speed": 13.14,
+                    "descent": 427.499,
+                    "distance": 23.478,
+                    "duration": "2:08:35",
+                    "max_alt": 158.41,
+                    "max_cadence": null,
+                    "max_hr": null,
+                    "best_pace": null,
+                    "max_power": null,
+                    "max_speed": 25.59,
+                    "min_alt": 55.03,
+                    "moving": "1:47:11",
+                    "pauses": "0:20:32",
+                    "segment_id": 0,
+                    "workout_id": "PsjeeXbJZ2JJNQcTCPxVvF"
+                  }
+                ],
+                "sport_id": 4,
+                "suspended": false,
+                "suspended_at": null,
+                "title": "VTT dans le Gard",
+                "user": {
+                  "created_at": "Sun, 31 Dec 2017 09:00:00 GMT",
+                  "followers": 0,
+                  "following": 0,
+                  "nb_workouts": 3,
+                  "picture": false,
+                  "role": "user",
+                  "suspended_at": null,
+                  "username": "Sam"
+                },
+                "weather_end": null,
+                "weather_start": null,
+                "with_analysis": false,
+                "with_file": true,
+                "workout_date": "Tue, 26 Apr 2016 14:42:30 GMT",
+                "workout_visibility": "private"
+              }
+            ]
+          },
+          "status": "success"
+        }
+
+    :param string workout_short_id: workout short id
+
+    :reqheader Authorization: OAuth 2.0 Bearer Token
+
+    :statuscode 200: workout updated
+    :statuscode 400:
+        - ``error when parsing fit file``
+        - ``error when parsing gpx file``
+        - ``error when parsing kml file``
+        - ``error when parsing kmz file``
+        - ``error when parsing tcx file``
+        - ``one or more values, entered or calculated, exceed the limits``
+    :statuscode 401:
+        - ``provide a valid auth token``
+        - ``signature expired, please log in again``
+        - ``invalid token, please log in again``
+    :statuscode 403:
+        - ``you do not have permissions, your account is suspended``
+    :statuscode 404: ``workout not found``
+    :statuscode 500: ``error, please try again or contact the administrator``
+
+    """
+    try:
+        service = WorkoutFromFileRefreshService(
+            workout, update_weather=True, get_elevation_on_refresh=False
+        )
+        updated_workout = service.refresh()
+    except WorkoutExceedingValueException as e:
+        appLog.error(e.detail)
+        return ExceedingValueErrorResponse()
+    except (
+        WorkoutException,
+        WorkoutFileException,
+        WorkoutRefreshException,
+    ) as e:
+        db.session.rollback()
+        if e.status == "error":
+            appLog.exception(ERROR_MESSAGE_ON_REFRESH)
+            return InternalServerErrorResponse(e.message)
+        return InvalidPayloadErrorResponse(e.message, e.status)
+    except Exception as e:
+        return handle_error_and_return_response(e, db=db)
+    if not updated_workout:
+        # This should not happen when refreshing from the UI.
+        # If no workout is returned, this is due to the file not being found,
+        # and an error will be raised.
+        return InternalServerErrorResponse(ERROR_MESSAGE_ON_REFRESH)
+    return {
+        "status": "success",
+        "data": {
+            "workouts": [
+                updated_workout.serialize(user=auth_user, light=False)
+            ]
+        },
+    }, 200

@@ -1,0 +1,42 @@
+{
+  "ABOUT": "за",
+  "ACTION": "действие",
+  "ACTIVE": "активно",
+  "CONFIRMATION": "Потвърждение",
+  "CONTACT": "контакт",
+  "DAY": "ден | дни",
+  "DESCRIPTION": "Описание",
+  "DISPLAYED": "Показано",
+  "DOCUMENTATION": "документация",
+  "HERE": "тук",
+  "HIDDEN": "Скрито",
+  "HOME": "Начало",
+  "HOURS": "час|часове",
+  "INACTIVE": "неактивен",
+  "LABEL": "етикет",
+  "LAST_UPDATE": "Последна актуализация",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Може да се използва Markdown синтаксис.",
+  "MINUTES": "минута|минути",
+  "NEXT": "следващ",
+  "NO": "Не",
+  "NO_DESCRIPTION": "няма описание",
+  "NO_NOTES": "Без бележки",
+  "PREVIOUS": "предишен",
+  "SECONDS": "секунда|секунди",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "възходящ",
+      "DESC": "низходящ",
+      "LABEL": "сортиране"
+    },
+    "ORDER_BY": {
+      "LABEL": "подреди по"
+    },
+    "PER_PAGE": {
+      "LABEL": "на страница"
+    }
+  },
+  "TOTAL": "общо",
+  "TOTAL_DURATION_WITH_PAUSES": "обща продължителност с паузите",
+  "YES": "Да"
+}

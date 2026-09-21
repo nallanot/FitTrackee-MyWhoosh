@@ -1,0 +1,26 @@
+from typing import List
+
+
+class InvalidEquipmentException(Exception):
+    def __init__(
+        self, status: str, message: str, equipment_short_id: str
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+        self.equipment_id = equipment_short_id
+
+
+class InvalidEquipmentsException(Exception):
+    pass
+
+
+class EquipmentForbiddenException(Exception):
+    pass
+
+
+class MiscEquipmentLimitExceededException(Exception):
+    def __init__(self, message: str, sport_ids: List[int]) -> None:
+        super().__init__(message)
+        self.message = message
+        self.sport_ids = sport_ids

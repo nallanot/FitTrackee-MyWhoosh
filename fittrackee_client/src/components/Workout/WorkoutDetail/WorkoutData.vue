@@ -1,0 +1,283 @@
+<template>
+  <div id="workout-info">
+    <div v-if="workoutObject.originalFile === 'fit'" class="data-origin">
+      {{
+        t(
+          `workouts.${workoutObject.statsFromFile ? 'DATA_FROM_FILE' : 'CALCULATED_DATA'}`
+        )
+      }}
+    </div>
+    <div class="workout-data" v-if="workoutObject.source !== null">
+      <i class="fa fa-info-circle" aria-hidden="true" />
+      <span class="label"> {{ $t('workouts.SOURCE') }} </span>:
+      <span class="label">{{ workoutObject.source }}</span>
+    </div>
+    <div class="workout-data">
+      <i class="fa fa-clock-o" aria-hidden="true" />
+      <span class="label"> {{ $t('workouts.DURATION') }} </span>:
+      <span class="value">{{ workoutObject.moving }}</span>
+      <WorkoutRecord :workoutObject="workoutObject" recordType="LD" />
+      <div v-if="withPause">
+        ({{ $t('workouts.PAUSES') }}:
+        <span class="value">{{ workoutObject.pauses }}</span> -
+        {{ $t('workouts.TOTAL_DURATION') }}:
+        <span class="value">{{ workoutObject.duration }})</span>
+      </div>
+    </div>
+    <div class="workout-data" v-if="workoutObject.distance !== null">
+      <i class="fa fa-road" aria-hidden="true" />
+      <span class="label"> {{ $t('workouts.DISTANCE') }} </span>:
+      <Distance
+        :distance="workoutObject.distance"
+        :digits="3"
+        unitFrom="km"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord :workoutObject="workoutObject" recordType="FD" />
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.avePace !== null && workoutObject.maxPace !== null"
+    >
+      <img
+        class="chronometer"
+        src="/img/workouts/chronometer.svg"
+        :alt="$t('workouts.PACE')"
+      />
+      <span class="label"> {{ $t('workouts.AVERAGE_PACE') }} </span>:
+      <Pace
+        :pace="workoutObject.avePace"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord :workoutObject="workoutObject" recordType="AP" /><br />
+      <span class="label"> {{ $t('workouts.BEST_PACE') }} </span>:
+      <Pace
+        :pace="workoutObject.maxPace"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord :workoutObject="workoutObject" recordType="BP" />
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.aveSpeed !== null && workoutObject.maxSpeed !== null"
+    >
+      <i class="fa fa-tachometer" aria-hidden="true" />
+      <span class="label">{{ $t('workouts.AVERAGE_SPEED') }}</span
+      >:
+      <Distance
+        :distance="workoutObject.aveSpeed"
+        unitFrom="km"
+        :speed="true"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord :workoutObject="workoutObject" recordType="AS" /><br />
+      <span class="label"> {{ $t('workouts.MAX_SPEED') }} </span>:
+      <Distance
+        :distance="workoutObject.maxSpeed"
+        unitFrom="km"
+        :speed="true"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord :workoutObject="workoutObject" recordType="MS" />
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.maxAlt !== null && workoutObject.minAlt !== null"
+    >
+      <img
+        class="mountains"
+        src="/img/workouts/mountains.svg"
+        :alt="$t('workouts.ELEVATION')"
+      />
+      <span class="label">{{ $t('workouts.MIN_ALTITUDE') }}</span
+      >:
+      <Distance
+        :distance="workoutObject.minAlt"
+        unitFrom="m"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      /><br />
+      <span class="label">{{ $t('workouts.MAX_ALTITUDE') }}</span
+      >:
+      <Distance
+        :distance="workoutObject.maxAlt"
+        unitFrom="m"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.ascent !== null && workoutObject.descent !== null"
+    >
+      <i class="fa fa-location-arrow" aria-hidden="true" />
+      <span class="label">{{ $t('workouts.ASCENT') }}</span
+      >:
+      <Distance
+        :distance="workoutObject.ascent"
+        unitFrom="m"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+      <WorkoutRecord
+        v-if="displayHARecord"
+        :workoutObject="workoutObject"
+        recordType="HA"
+      />
+      <br />
+      <span class="label"> {{ $t('workouts.DESCENT') }} </span>:
+      <Distance
+        :distance="workoutObject.descent"
+        unitFrom="m"
+        :strong="true"
+        :useImperialUnits="useImperialUnits"
+      />
+    </div>
+    <div
+      class="workout-data"
+      v-if="
+        workoutObject.aveCadence !== null && workoutObject.maxCadence !== null
+      "
+    >
+      <img
+        class="cadence"
+        src="/img/workouts/cadence.svg"
+        :alt="$t('workouts.CADENCE')"
+      />
+      <span class="label">{{ $t('workouts.AVERAGE_CADENCE') }}</span
+      >:
+      <span class="value" :title="t(`workouts.UNITS.${cadenceUnit}.LABEL`)"
+        >{{ workoutObject.aveCadence }}
+        {{ t(`workouts.UNITS.${cadenceUnit}.UNIT`) }}</span
+      >
+      <br />
+      <span class="label"> {{ $t('workouts.MAX_CADENCE') }}</span
+      >:
+      <span class="value" :title="t(`workouts.UNITS.${cadenceUnit}.LABEL`)"
+        >{{ workoutObject.maxCadence }}
+        {{ t(`workouts.UNITS.${cadenceUnit}.UNIT`) }}</span
+      >
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.avePower !== null && workoutObject.maxPower !== null"
+    >
+      <i class="fa fa-bolt" aria-hidden="true" />
+      <span class="label">{{ $t('workouts.AVERAGE_POWER') }}</span
+      >:
+      <span class="value" :title="t('workouts.UNITS.watt.LABEL')">
+        {{ workoutObject.avePower }} {{ t('workouts.UNITS.watt.UNIT') }}
+      </span>
+      <br />
+      <span class="label"> {{ $t('workouts.MAX_POWER') }}</span
+      >:
+      <span class="value" :title="t('workouts.UNITS.watt.LABEL')">
+        {{ workoutObject.maxPower }} {{ t('workouts.UNITS.watt.UNIT') }}
+      </span>
+    </div>
+    <div
+      class="workout-data"
+      v-if="workoutObject.aveHr !== null && workoutObject.maxHr !== null"
+    >
+      <i class="fa fa-heartbeat" aria-hidden="true" />
+      <span class="label">{{ $t('workouts.AVERAGE_HR') }}</span
+      >:
+      <span class="value" :title="t(`workouts.UNITS.bpm.LABEL`)"
+        >{{ workoutObject.aveHr }} {{ t(`workouts.UNITS.bpm.UNIT`) }}</span
+      >
+      <br />
+      <span class="label"> {{ $t('workouts.MAX_HR') }}</span
+      >:
+      <span class="value" :title="t(`workouts.UNITS.bpm.LABEL`)"
+        >{{ workoutObject.maxHr }} {{ t(`workouts.UNITS.bpm.UNIT`) }}</span
+      >
+    </div>
+    <div class="workout-data" v-if="workoutObject.calories">
+      <i class="fa fa-fire" aria-hidden="true" />
+      <span class="label">{{ $t('workouts.CALORIES') }}</span
+      >:
+      <span class="value" :title="t(`workouts.UNITS.kcal.LABEL`)">
+        {{ workoutObject.calories }} {{ t(`workouts.UNITS.kcal.UNIT`) }}</span
+      >
+    </div>
+    <div class="spacer" />
+    <WorkoutWeather
+      :workoutObject="workoutObject"
+      :useImperialUnits="useImperialUnits"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+  import { computed, toRefs } from 'vue'
+  import type { ComputedRef } from 'vue'
+  import { useI18n } from 'vue-i18n'
+
+  import WorkoutRecord from '@/components/Workout/WorkoutDetail/WorkoutRecord.vue'
+  import WorkoutWeather from '@/components/Workout/WorkoutDetail/WorkoutWeather.vue'
+  import type { IWorkoutObject } from '@/types/workouts'
+
+  interface Props {
+    workoutObject: IWorkoutObject
+    useImperialUnits: boolean
+    displayHARecord: boolean
+    cadenceUnit: string
+  }
+  const props = defineProps<Props>()
+  const { displayHARecord, workoutObject, useImperialUnits } = toRefs(props)
+
+  const { t } = useI18n()
+
+  const withPause: ComputedRef<boolean> = computed(
+    () =>
+      workoutObject.value.pauses !== '0:00:00' &&
+      workoutObject.value.pauses !== null
+  )
+</script>
+
+<style lang="scss" scoped>
+  @use '~@/scss/vars.scss' as *;
+  #workout-info {
+    display: flex;
+    flex-direction: column;
+    padding: $default-padding $default-padding * 2;
+    width: 100%;
+
+    .fa,
+    .mountains,
+    .cadence,
+    .chronometer {
+      min-width: 22px;
+    }
+    .fa-bolt {
+      padding-left: $default-padding * 0.65;
+      min-width: 15px;
+    }
+
+    .workout-data {
+      padding: $default-padding * 0.25 0;
+      .label {
+        text-transform: capitalize;
+      }
+      .value {
+        font-weight: bold;
+      }
+    }
+    .data-origin {
+      font-style: italic;
+      font-size: 0.9em;
+    }
+    .spacer {
+      flex-grow: 3;
+    }
+
+    @media screen and (max-width: $small-limit) {
+      padding: $default-padding;
+    }
+  }
+</style>

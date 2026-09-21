@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+# Upgrade database
+echo "Upgrading database..."
+ftcli db upgrade || { echo "Failed to upgrade database!"; exit 1; }
+
+# Run app w/ gunicorn
+echo "Running app..."
+exec gunicorn -b 0.0.0.0:5000 "fittrackee:create_app()" --log-level "${LOG_LEVEL:-info}" --error-logfile "${GUNICORN_LOG:-/usr/src/app/logs/gunicorn.log}" --workers="${APP_WORKERS:-1}" --timeout "${APP_TIMEOUT:-30}" --no-control-socket

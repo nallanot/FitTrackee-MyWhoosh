@@ -1,0 +1,169 @@
+{
+  "ABOUT": {
+    "DESCRIPTION": "Extra informatie die nuttig kan zijn voor uw gebruikers.",
+    "TEXT": "Gedetailleerde informatie over deze instantie"
+  },
+  "ACTION": "Actie | Acties",
+  "ACTIVATE_USER_ACCOUNT": "Activeer account",
+  "ACTIVE": "Ingeschakeld",
+  "ADMIN": "Beheer",
+  "ADMINISTRATION": "Instellingen",
+  "ADMIN_RIGHTS_DELETE_USER_ACCOUNT": "Toevoegen/verwijderen van administrator rechten, verwijder gebruikersaccount.",
+  "APPLICATION": "Applicatie",
+  "APP_CONFIG": {
+    "ADMIN_CONTACT": "Administrator email voor contact",
+    "ASYNCHRONOUS_UPLOAD_DISABLED": "Asyncrone zip upload is uitgeschakeld.",
+    "GLOBAL_MAP_WORKOUTS_LIMIT_HELP": "Deze waarde mag niet groter zijn dan 50.000.",
+    "GLOBAL_MAP_WORKOUTS_LIMIT_LABEL": "Max. aantal trainingen op wereldkaart",
+    "MAX_FILES_IN_ZIP_LABEL": "Max. aantal bestanden in zip archief",
+    "MAX_IMAGE_SIZE_LABEL": "Max grootte van afbeeldingen (in Mb)",
+    "MAX_SYNC_FILES_IN_ZIP_LABEL": "Max aantal bestanden voor synchrone upload",
+    "MAX_USERS_HELP": "Bij 0, geen limiet op registratie.",
+    "MAX_USERS_LABEL": "Max. aantal actieve gebruikers",
+    "NO_CONTACT_EMAIL": "geen contact email",
+    "SINGLE_UPLOAD_MAX_SIZE_LABEL": "Max. grootte van bestanden voor upload (in Mb)",
+    "STATS_WORKOUTS_LIMIT_HELP": "Bij 0, geen beperking op het aantal trainingen.",
+    "STATS_WORKOUTS_LIMIT_LABEL": "Max. aantal trainingen voor statistieken",
+    "TITLE": "Applicatie configureren",
+    "ZIP_UPLOAD_MAX_SIZE_LABEL": "Max. grootte van zip archief (in Mb)"
+  },
+  "APP_MODERATION": {
+    "ACTIONS": {
+      "ADD_COMMENT": "Reactie toevoegen",
+      "MARK_AS_RESOLVED": "Markeren als opgelost",
+      "MARK_AS_UNRESOLVED": "Markeren als onopgelost",
+      "SEND_WARNING_EMAIL": "Stuur een waarschuwing",
+      "SUSPEND_ACCOUNT": "Blokkeer gebruiker",
+      "SUSPEND_CONTENT": "Blokkeer inhoud",
+      "UNSUSPEND_ACCOUNT": "Heractiveer gebruiker",
+      "UNSUSPEND_CONTENT": "Heractiveer inhoud"
+    },
+    "APPEAL": {
+      "APPROVED": "Het beroep is goedgekeurd {0}.",
+      "AUTOMATICALLY_APPROVED_BY_UNSUSPENSION": "Het beroep werd goedgekurd door de blokkering op te heffen.",
+      "HIDE": "Verberg beroep",
+      "REASON_IS": "De reden is:",
+      "REJECTED": "He beroep werd onontvankelijk verklaard {0}.",
+      "SEE": "Beroep tonen"
+    },
+    "DESCRIPTION": "Beheer van meldingen.",
+    "NOTES_AND_ACTIONS": "Noties en acties",
+    "NO_REPORTS_FOUND": "Geen meldingen",
+    "ORDER_BY": {
+      "CREATED_AT": "aanmaakdatum",
+      "UPDATED_AT": "bijgewerkt op"
+    },
+    "REASON": "Reden",
+    "REPORT": "melding | meldingen",
+    "REPORTED_BY": "gemeld door",
+    "REPORTED_CONTENT": "Gemelde inhoud",
+    "REPORTED_USER": "gemelde gebruiker",
+    "REPORTER": "melder",
+    "REPORT_ACTIONS": {
+      "comment_suspension": "De reactie werd geblokeerd door {1} {2}.",
+      "comment_unsuspension": "De blokkering van de reactie werd opgeheven door {1} {2}.",
+      "report_reopening": "De melding werd heropent door {1} {2}.",
+      "report_resolution": "de melding werd gemarkeerd als opgelost door {1} {2}.",
+      "user_suspension": "{0} werd geblokkeerd door {1} {2}.",
+      "user_unsuspension": "De {0} blokkering werd opgeheven door {1} {2}.",
+      "user_warning": "Een waarschuwing werd naar {0} verzonden door {1} {2}.",
+      "user_warning_lifting": "De {0} waarschuwing werd opgeheven door {1} {2}.",
+      "workout_suspension": "De training werd geblokkeerd door {1} {2}.",
+      "workout_unsuspension": "De trainingsblokkering werd opgeheven door {1} {2}."
+    },
+    "REPORT_NOTE": "Notitie door",
+    "RESOLVED": {
+      "FALSE": "Onopgelost",
+      "TRUE": "Opgelost"
+    },
+    "RESOLVED_AT": "Opgelost op",
+    "RESOLVED_BY": "Opgelost door",
+    "STATUS": "status",
+    "TEXTAREA_PLACEHOLDER": {
+      "ADD_COMMENT": "Voeg een opmerking, actie of andere info toe.",
+      "INFORMATION_VISIBLE_TO_USER": "Deze info is zichtbaar voor de gebruiker.",
+      "MARK_AS_RESOLVED": "Geef de reden voor oplossing aan.",
+      "MARK_AS_UNRESOLVED": "Geef de reden voor niet-oplossing aan.",
+      "SEND_WARNING_EMAIL": "Geef de reden voor een waarschuwing (niet verplicht).",
+      "SUSPEND": "Geen de reden voor blokkering (niet verplicht).",
+      "UNSUSPEND": "Voeg een opmerking toe (niet verplicht).",
+      "UPDATE_APPEAL": "Geef een reden voor verwerking van het beroep."
+    },
+    "TITLE": "Moderatie",
+    "UNRESOLVED_REPORTS_EXIST": "Er zijn onopgeloste meldingen.",
+    "USERS_QUEUED_TASKS_EXIST": "Er staan taken in de wachtrij",
+    "VIEW_REPORT": "Toon melding"
+  },
+  "BACK_TO_ADMIN": "Terug naar beheer",
+  "CONFIRM_SUSPEND_ACCOUNT": "Ben je zeker dat je {0} wilt blokkeren?",
+  "CONFIRM_SUSPEND_CONTENT": "Ben je zeker dat je de gemelde inhoud wilt blokkeren?",
+  "CONFIRM_USER_ACCOUNT_DELETION": "Weet u zeker dat u de account {0} wilt wissen? Alle gegevens worden verwijderd, dit kan niet ongedaan gemaakt worden.",
+  "CONFIRM_USER_PASSWORD_RESET": "Weet u zeker dat u het wachtwoord voor {0} wilt resetten?",
+  "CURRENT_EMAIL": "Huidige email",
+  "DELETED_COMMENT": "Verwijderde reactie",
+  "DELETED_USER": "Verwijderde gebruiker",
+  "DELETED_WORKOUT": "Verwijderde training",
+  "DELETE_USER": "Verwijder gebruiker",
+  "EMAIL_SENDING_DISABLED": "Emails verzenden is uitgeschakeld.",
+  "ENABLE_DISABLE_EQUIPMENT_TYPES": "Inschakelen/uitschakelen materiaaltypes.",
+  "ENABLE_DISABLE_SPORTS": "Aan- of uitzetten van sporten.",
+  "EQUIPMENT_TYPES": {
+    "TABLE": {
+      "ACTIVE": "Actief",
+      "HAS_EQUIPMENTS": "materialen bestaan",
+      "IMAGE": "Afbeelding",
+      "LABEL": "Label"
+    },
+    "TITLE": "Beheer materialen"
+  },
+  "NEW_EMAIL": "Nieuwe email",
+  "NO_TEXT_ENTERED": "Geen tekst ingegeven",
+  "PASSWORD_RESET_SUCCESSFUL": "Het wachtwoord werd gereset.",
+  "PRIVACY_POLICY_DESCRIPTION": "Voeg uw eigen privacybeleid toe, of laat leeg om het standaard beleid te gebruiken.",
+  "REGISTRATION_DISABLED": "Registratie is momenteel uitgeschakeld.",
+  "REGISTRATION_ENABLED": "Registratie is momenteel ingeschakeld.",
+  "RESET_USER_PASSWORD": "Reset wachtwoord",
+  "SPORTS": {
+    "TABLE": {
+      "ACTIVE": "Ingeschakeld",
+      "HAS_WORKOUTS": "Trainingen aanwezig",
+      "IMAGE": "Afbeelding",
+      "LABEL": "Label"
+    },
+    "TITLE": "Beheer sporten"
+  },
+  "UPDATE_APPLICATION_DESCRIPTION": "De applicatie configureren.",
+  "UPDATE_USER_EMAIL": "Update email",
+  "USER": "gebruiker | gebruikers",
+  "USERS": {
+    "SELECTS": {
+      "ORDER_BY": {
+        "CREATED_AT": "Registratie datum",
+        "IS_ACTIVE": "Account status",
+        "ROLE": "rol",
+        "USERNAME": "gebruikersnaam",
+        "WORKOUTS_COUNT": "aantal trainingen"
+      }
+    },
+    "TABLE": {
+      "CHANGE_ROLE": "Wijzig rol",
+      "CHANGE_TO_ADMIN": "Wijzig naar admin",
+      "CHANGE_TO_MODERATOR": "Wijzig naar moderator",
+      "CHANGE_TO_USER": "Wijzig naar gebruiker"
+    },
+    "TITLE": "Administratie - Gebruikers"
+  },
+  "USERS_QUEUED_TASKS": {
+    "DESCRIPTION": "Taken in wachtrij bekijken",
+    "LABEL": "Taken in wachtrij",
+    "LIST_DESCRIPTION": "Indien geen workers draaiende zijn gebruik dan de CLI om ze te verwerken.",
+    "NO_USERS_QUEUED_TASKS": "Geen taken in wachtrij",
+    "TASK_TYPES": {
+      "LABEL": "Taaktype",
+      "user_data_export": "Gebruikersdata export",
+      "workouts_archive_upload": "Training archief uploads"
+    },
+    "VIEW_OTHER_TASKS": "Toon andere taken in de wachtrij"
+  },
+  "USER_EMAIL_UPDATE_SUCCESSFUL": "Het emailadres werd bijgewerkt."
+}

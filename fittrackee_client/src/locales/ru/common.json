@@ -1,0 +1,59 @@
+{
+  "ABOUT": "о программе",
+  "ACTION": "действие",
+  "ACTIVE": "активный",
+  "CONFIRMATION": "Подтверждение",
+  "CONTACT": "контакт",
+  "CREATION_DATE": "Дата создания",
+  "DATA_IS_LOADING": "загрузка данных…",
+  "DAY": "день | дней",
+  "DESCRIPTION": "Описание",
+  "DISABLED": "отключено",
+  "DISPLAYED": "Показано",
+  "DOCUMENTATION": "документация",
+  "DO_NOT_SHOW_THIS_MESSAGE_AGAIN": "Не показывать это сообщение снова",
+  "EDITED": "отредактировано",
+  "ENABLED": "включено",
+  "FILES": "Файлы",
+  "HERE": "здесь",
+  "HIDDEN": "Скрытый",
+  "HIDE": "Скрыть",
+  "HOME": "Домой",
+  "HOURS": "час|часов",
+  "INACTIVE": "неактивный",
+  "LABEL": "название",
+  "LAST_UPDATE": "Последнее обновление",
+  "LAST_UPDATED_ON": "Последнее обновление",
+  "LOADING": "загрузка…",
+  "MARKDOWN_SYNTAX_CAN_BE_USED": "Можно использовать синтаксис Markdown.",
+  "MINUTES": "минута|минут",
+  "NEXT": "далее",
+  "NO": "Нет",
+  "NO_DESCRIPTION": "Описание отсутствует",
+  "NO_NOTES": "Заметок нет",
+  "PHOTOS": "Фото",
+  "PREVIOUS": "назад",
+  "REPORT_PLACEHOLDER": "укажите причину жалобы",
+  "REPORT_SUBMITTED": "Жалоба отправлена.",
+  "SCROLL_DOWN": "Прокрутить вниз",
+  "SCROLL_UP": "Прокрутить вверх",
+  "SECONDS": "секунда|секунд",
+  "SEE_REPORT": "См. жалобу {0}.",
+  "SELECTS": {
+    "ORDER": {
+      "ASC": "по возрастанию",
+      "DESC": "по убыванию",
+      "LABEL": "сортировать"
+    },
+    "ORDER_BY": {
+      "LABEL": "сортировать по"
+    },
+    "PER_PAGE": {
+      "LABEL": "на страницу"
+    }
+  },
+  "TOTAL": "всего",
+  "TOTAL_DURATION_WITH_PAUSES": "общая продолжительность с паузами",
+  "TYPE": "тип",
+  "YES": "Да"
+}

@@ -1,0 +1,90 @@
+# docker compose for evaluation and development only
+# not suitable for production
+
+# To change fittrackee container port, create a .env file with APP_PORT
+# to be exported by Makefile
+#
+# Example:
+# export APP_PORT=5001
+
+services:
+  fittrackee-db:
+    container_name: fittrackee-db
+    # Note: there is no official image for PostGIS on ARM platforms yet.
+    # The workaround is to build PostGIS image locally.
+    image: postgis/postgis:17-3.5-alpine
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+      - ./db/create-databases.sh:/docker-entrypoint-initdb.d/create-databases.sh
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -p 5432 -U postgres -d fittrackee_test_gw7 -tAc \"SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='postgis')\" | grep -q t"]
+      interval: 10s
+      timeout: 120s
+      retries: 12
+
+  fittrackee:
+    container_name: fittrackee
+    build:
+      context: .
+      dockerfile: Dockerfile-dev
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    env_file:
+      - .env.docker.dev
+    environment:
+      - APP_PORT=${APP_PORT:-5000}
+    depends_on:
+      fittrackee-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mail:
+        condition: service_started
+    volumes:
+      - .:/usr/src/app
+      - ./data/uploads:/usr/src/app/data/uploads
+      - ./data/logs:/usr/src/app/data/logs
+      - ./data/.staticmap_cache:/usr/src/app/data/.staticmap_cache
+
+  fittrackee_client:
+    container_name: fittrackee_client
+    environment:
+      - NODE_ENV=development
+      - VITE_APP_API_URL=http://localhost:${APP_PORT:-5000}
+    build:
+      context: ./fittrackee_client
+    volumes:
+      - ./fittrackee_client:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - fittrackee
+    ports:
+      - "3000:3000"
+    stdin_open: true
+    tty: true
+    command: /bin/sh
+
+  redis:
+    container_name: fittrackee-redis
+    image: redis:8.0-alpine
+    hostname: redis
+    ports:
+      - "6379:6379"
+
+  mail:
+    container_name: fittrackee-mailhog
+    image: "mailhog/mailhog"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  selenium:
+    image: selenium/standalone-firefox:latest
+    hostname: selenium
+    privileged: true
+    shm_size: 2g

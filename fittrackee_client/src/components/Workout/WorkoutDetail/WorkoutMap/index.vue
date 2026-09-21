@@ -1,0 +1,448 @@
+<template>
+  <div id="workout-map">
+    <div v-if="workoutData.loading" class="leaflet-container" />
+    <div v-else>
+      <VFullscreen v-if="workoutData.workout.with_file" v-model="isFullscreen">
+        <div
+          class="leaflet-container"
+          :class="{ 'fullscreen-map': isFullscreen }"
+        >
+          <LMap
+            v-if="geoJson && center && bounds.length === 2"
+            v-model:zoom="zoom"
+            :maxZoom="19"
+            :center="center"
+            :bounds="bounds"
+            :zoomAnimation="false"
+            ref="workoutMap"
+            @ready="fitBounds(bounds)"
+            :use-global-leaflet="true"
+            class="map"
+            :aria-label="$t('workouts.WORKOUT_MAP')"
+          >
+            <LControlLayers />
+            <LControl
+              position="topleft"
+              class="map-control"
+              tabindex="0"
+              role="button"
+              :title="$t('workouts.RESET_ZOOM')"
+              @click="resetZoom"
+              @keydown.enter="resetZoom"
+            >
+              <i class="fa fa-refresh" aria-hidden="true" />
+            </LControl>
+            <LControl
+              position="topleft"
+              class="map-control"
+              tabindex="0"
+              role="button"
+              :title="
+                $t(`workouts.${isFullscreen ? 'EXIT' : 'VIEW'}_FULLSCREEN`)
+              "
+              @click="toggleFullscreen"
+              @keydown.enter="toggleFullscreen"
+            >
+              <i
+                :class="`fa fa-${isFullscreen ? 'compress' : 'arrows-alt'}`"
+                aria-hidden="true"
+              />
+            </LControl>
+            <LControl
+              v-if="withHeatmap"
+              position="topleft"
+              class="map-control"
+              tabindex="0"
+              role="button"
+              :title="
+                $t(`workouts.${displayHeatmap ? 'EXIT' : 'VIEW'}_HEATMAP`)
+              "
+              @click="toggleHeatmap"
+              @keydown.enter="toggleHeatmap"
+            >
+              <i
+                :class="`fa fa-${displayHeatmap ? 'map-pin' : 'dot-circle-o'}`"
+                aria-hidden="true"
+              />
+            </LControl>
+            <LTileLayer
+              v-for="provider in availableTileProviders"
+              :key="provider.id"
+              :name="provider.name"
+              :url="`${getApiUrl()}workouts/map_tile/{s}/{z}/{x}/{y}.png?tile_provider=${provider.id}`"
+              :visible="provider.id === defaultTileProvider.id"
+              :attribution="provider.attribution"
+              :bounds="bounds"
+              :maxZoom="19"
+              :layer-type="
+                availableTileProviders.length > 1 ? 'base' : undefined
+              "
+            />
+            <LGeoJson
+              :geojson="geoJson"
+              :options="geoJsonOptions"
+              v-if="!displayHeatmap"
+            />
+            <LMarker
+              v-if="markerCoordinates.latitude && markerCoordinates.longitude"
+              :lat-lng="[
+                markerCoordinates.latitude,
+                markerCoordinates.longitude,
+              ]"
+            />
+            <LLayerGroup
+              :name="$t('workouts.START_AND_FINISH')"
+              layer-type="overlay"
+            >
+              <CustomMarker
+                v-if="
+                  startMarkerCoordinates.latitude &&
+                  startMarkerCoordinates.longitude
+                "
+                :markerCoordinates="startMarkerCoordinates"
+                :isStart="true"
+              />
+              <CustomMarker
+                v-if="
+                  endMarkerCoordinates.latitude &&
+                  endMarkerCoordinates.longitude
+                "
+                :markerCoordinates="endMarkerCoordinates"
+                :isStart="false"
+              />
+            </LLayerGroup>
+            <LLayerGroup
+              v-if="workoutMedia.length > 0"
+              :name="capitalize($t('common.PHOTOS'))"
+              layer-type="overlay"
+            >
+              <LMarkerClusterGroup :chunk-interval="1" :chunked-loading="false">
+                <CustomPhotosMarker
+                  v-for="media in workoutMedia"
+                  :key="media.id"
+                  :marker-coordinates="media.meta.coordinates"
+                >
+                  <PhotoPopup
+                    :media="media"
+                    @displayMediaModal="setDisplayedMediaIndex(media.id)"
+                  />
+                </CustomPhotosMarker>
+              </LMarkerClusterGroup>
+            </LLayerGroup>
+          </LMap>
+        </div>
+      </VFullscreen>
+      <div v-else class="no-map">{{ $t('workouts.NO_MAP') }}</div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+  import { gpx } from '@tmcw/togeojson'
+  import {
+    LControl,
+    LControlLayers,
+    LGeoJson,
+    LLayerGroup,
+    LMap,
+    LMarker,
+    LTileLayer,
+  } from '@vue-leaflet/vue-leaflet'
+  import type { GeoJSON } from 'geojson'
+  import HeatmapOverlay from 'heatmap.js/plugins/leaflet-heatmap/leaflet-heatmap.js'
+  import { type PointExpression, type LatLngBoundsLiteral } from 'leaflet'
+  import { capitalize, computed, onUnmounted, ref, toRefs, watch } from 'vue'
+  import type { Ref, ComputedRef } from 'vue'
+  import 'leaflet/dist/leaflet.css'
+  import { LMarkerClusterGroup } from 'vue-leaflet-markercluster'
+
+  import CustomMarker from '@/components/Workout/WorkoutDetail/WorkoutMap/CustomMarker.vue'
+  import CustomPhotosMarker from '@/components/Workout/WorkoutDetail/WorkoutMap/CustomPhotosMarker.vue'
+  import PhotoPopup from '@/components/Workout/WorkoutDetail/WorkoutMap/PhotoPopup.vue'
+  import useTileProviders from '@/composables/useTileProviders.ts'
+  import { WORKOUTS_STORE } from '@/store/constants.ts'
+  import type { IHeatmapData, IHeatmapOverlay } from '@/types/heatmap.ts'
+  import type {
+    IGeoJsonOptions,
+    ILeafletObject,
+    TCoordinates,
+  } from '@/types/map'
+  import type { ITileProvider } from '@/types/tileProviders.ts'
+  import type { IMediaAttachment, IWorkoutData } from '@/types/workouts'
+  import { useStore } from '@/use/useStore.ts'
+  import { getApiUrl } from '@/utils'
+
+  interface Props {
+    workoutData: IWorkoutData
+    markerCoordinates?: TCoordinates
+    withHeatmap?: boolean
+    geoJsonOptions?: IGeoJsonOptions
+  }
+  const props = withDefaults(defineProps<Props>(), {
+    markerCoordinates: () => ({}) as TCoordinates,
+    withHeatmap: false,
+    geoJsonOptions: () => ({}) as IGeoJsonOptions,
+  })
+  const { geoJsonOptions, workoutData, markerCoordinates, withHeatmap } =
+    toRefs(props)
+
+  const { availableTileProviders } = useTileProviders()
+
+  const store = useStore()
+
+  const isFullscreen: Ref<boolean> = ref(false)
+  const workoutMap: Ref<ILeafletObject | null> = ref(null)
+  const zoom: Ref<number> = ref(13)
+  const heatmapLayer: Ref<IHeatmapOverlay | null> = ref(null)
+  const displayHeatmap: Ref<boolean> = ref(false)
+
+  const bounds: ComputedRef<LatLngBoundsLiteral> = computed(() => getBounds())
+  const center: ComputedRef<PointExpression> = computed(() => getCenter(bounds))
+  const geoJson: ComputedRef<GeoJSON | null> = computed(() =>
+    workoutData.value.geojson
+      ? workoutData.value.geojson
+      : getGeoJson(workoutData.value.gpx)
+  )
+  const startMarkerCoordinates: ComputedRef<TCoordinates> = computed(() =>
+    getCoordinates('first')
+  )
+  const endMarkerCoordinates: ComputedRef<TCoordinates> = computed(() =>
+    getCoordinates('last')
+  )
+  const heatmapData: ComputedRef<IHeatmapData> = computed(() =>
+    getHeatmapData()
+  )
+  const workoutMedia: ComputedRef<IMediaAttachment[]> = computed(() =>
+    workoutData.value.workout.media_attachments.filter(
+      (media) => media.meta.coordinates
+    )
+  )
+  const defaultTileProvider: ComputedRef<ITileProvider> = computed(
+    () =>
+      availableTileProviders.value.find(
+        (provider) => provider.default_for_user
+      ) as ITileProvider
+  )
+  function setDisplayedMediaIndex(mediaId: string) {
+    const mediaIndex = workoutData.value.workout.media_attachments.findIndex(
+      (m) => m.id === mediaId
+    )
+    store.commit(
+      WORKOUTS_STORE.MUTATIONS.SET_DISPLAYED_MEDIA_INDEX,
+      mediaIndex === -1 ? undefined : mediaIndex
+    )
+  }
+  function getGeoJson(gpxContent: string): GeoJSON | null {
+    if (gpxContent !== '') {
+      try {
+        return gpx(new DOMParser().parseFromString(gpxContent, 'text/xml'))
+      } catch {
+        console.error('Invalid gpx content')
+        return null
+      }
+    }
+    return null
+  }
+  function getCoordinates(position: 'first' | 'last'): TCoordinates {
+    const index =
+      position === 'first' ? 0 : workoutData.value.chartData.length - 1
+    return workoutData.value && workoutData.value.chartData.length > 0
+      ? {
+          latitude: workoutData.value.chartData[index].latitude,
+          longitude: workoutData.value.chartData[index].longitude,
+        }
+      : { latitude: null, longitude: null }
+  }
+  function getCenter(
+    bounds: ComputedRef<LatLngBoundsLiteral>
+  ): PointExpression {
+    return [
+      (bounds.value[0][0] + bounds.value[1][0]) / 2,
+      (bounds.value[0][1] + bounds.value[1][1]) / 2,
+    ]
+  }
+  function getHeatmapConfig() {
+    let radius = 5
+    if (zoom.value > 18) {
+      radius = zoom.value === 19 ? 10 : 15
+    }
+    return {
+      radius,
+      maxOpacity: 0.8,
+      scaleRadius: false,
+      useLocalExtrema: false,
+      latField: 'latitude',
+      lngField: 'longitude',
+      gradient: {
+        '.1': '#c81ec8',
+        '.3': '#0000ff',
+        '.5': '#00ff00',
+        '.7': '#ffff1a',
+        '.99': '#f02b2b',
+      },
+    }
+  }
+  function getHeatmapData(): IHeatmapData {
+    if (
+      !displayHeatmap.value ||
+      !workoutData.value ||
+      workoutData.value.chartData.length === 0
+    ) {
+      return {
+        max: 12,
+        data: [],
+      }
+    }
+    return {
+      max: 12,
+      data: workoutData.value.chartData,
+    }
+  }
+  function addHeatMapLayer() {
+    if (!withHeatmap.value) {
+      return
+    }
+    if (workoutMap.value?.leafletObject) {
+      if (heatmapLayer.value) {
+        workoutMap.value.leafletObject.removeLayer(heatmapLayer.value)
+      }
+      heatmapLayer.value = new HeatmapOverlay(getHeatmapConfig())
+      workoutMap.value.leafletObject.addLayer(
+        heatmapLayer.value as IHeatmapOverlay
+      )
+      heatmapLayer.value?.setData(heatmapData.value)
+    }
+  }
+  function fitBounds(bounds: LatLngBoundsLiteral): void {
+    if (workoutMap.value?.leafletObject) {
+      workoutMap.value.leafletObject.fitBounds(bounds)
+    }
+  }
+  function getBounds(): LatLngBoundsLiteral {
+    return workoutData.value
+      ? [
+          [
+            workoutData.value.workout.bounds[0],
+            workoutData.value.workout.bounds[1],
+          ],
+          [
+            workoutData.value.workout.bounds[2],
+            workoutData.value.workout.bounds[3],
+          ],
+        ]
+      : []
+  }
+  function resetZoom(): void {
+    workoutMap.value?.leafletObject.fitBounds(getBounds())
+  }
+  function toggleFullscreen(): void {
+    isFullscreen.value = !isFullscreen.value
+    if (!isFullscreen.value) {
+      setTimeout(() => {
+        resetZoom()
+      }, 100)
+    }
+  }
+  function toggleHeatmap(): void {
+    displayHeatmap.value = !displayHeatmap.value
+    if (displayHeatmap.value) {
+      addHeatMapLayer()
+    } else if (heatmapLayer.value) {
+      workoutMap.value?.leafletObject.removeLayer(heatmapLayer.value)
+    }
+  }
+
+  watch(
+    () => workoutData.value,
+    () => {
+      if (displayHeatmap.value) {
+        addHeatMapLayer()
+      }
+    },
+    { deep: true }
+  )
+  watch(
+    () => withHeatmap.value,
+    (newWithHeatmap: boolean) => {
+      if (!newWithHeatmap) {
+        displayHeatmap.value = false
+        if (heatmapLayer.value) {
+          workoutMap.value?.leafletObject.removeLayer(heatmapLayer.value)
+          heatmapLayer.value = null
+        }
+      }
+    }
+  )
+  watch(
+    () => zoom.value,
+    () => {
+      if (withHeatmap.value && displayHeatmap.value) {
+        addHeatMapLayer()
+      }
+    }
+  )
+
+  onUnmounted(() => {
+    if (workoutMap.value?.leafletObject && heatmapLayer.value) {
+      workoutMap.value.leafletObject.removeLayer(heatmapLayer.value)
+      heatmapLayer.value = null
+    }
+  })
+</script>
+
+<style lang="scss" scoped>
+  @use '~@/scss/vars.scss' as *;
+  #workout-map {
+    padding: $default-padding 0;
+    .leaflet-container,
+    .no-map {
+      height: 400px;
+      width: 600px;
+    }
+    .no-map {
+      line-height: 400px;
+      filter: var(--no-map-filter);
+    }
+    .leaflet-container {
+      .map {
+        filter: var(--map-filter);
+      }
+      .map-control {
+        background: var(--map-control-bg-color);
+        padding: 5px 10px;
+        border: 2px solid var(--map-control-border-color);
+        border-radius: 3px;
+        color: var(--map-control-color);
+
+        &:hover {
+          background-color: var(--map-control-hover-bg-color);
+        }
+
+        .fa {
+          text-align: center;
+          min-width: 10px;
+        }
+      }
+    }
+    ::v-deep(.fullscreen) {
+      display: flex;
+      align-items: center;
+      z-index: 1000; // partial fix on iOS
+      .fullscreen-map {
+        height: 100%;
+        width: 100%;
+      }
+    }
+
+    @media screen and (max-width: $small-limit) {
+      padding: 0;
+      .leaflet-container {
+        width: 100%;
+        height: 300px;
+      }
+      .no-map {
+        display: none;
+      }
+    }
+  }
+</style>

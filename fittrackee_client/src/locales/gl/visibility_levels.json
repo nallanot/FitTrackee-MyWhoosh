@@ -1,0 +1,20 @@
+{
+  "ANALYSIS_VISIBILITY": "visibilidade da análise",
+  "CALORIES_VISIBILITY": "visibilidade das calorías",
+  "COMMENT_LEVELS": {
+    "followers_only": "só para seguidoras",
+    "private": "privada (só usuarias mencionadas)",
+    "public": "pública (calquera)"
+  },
+  "HR_VISIBILITY": "visibilidade do ritmo cardíaco",
+  "LEVELS": {
+    "followers_only": "só seguidoras",
+    "private": "privada (só para min)",
+    "public": "pública (calquera)"
+  },
+  "MAP_VISIBILITY": "visibilidade do mapa",
+  "MEDIA_VISIBILITY": "visibilidade do multimedia",
+  "VISIBILITY": "visibilidade",
+  "WORKOUTS_VISIBILITY": "Visibilidade dos datos relativos á actividade",
+  "WORKOUT_VISIBILITY": "visibilidade da actividade"
+}

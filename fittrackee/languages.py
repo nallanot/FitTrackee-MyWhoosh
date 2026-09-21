@@ -1,0 +1,30 @@
+LANGUAGES_DATE_STRING = {
+    # "be": r"d MMMM y 'г'.",   # Belarusian  # disabled for now
+    "bg": "d MMM yyyy",  # Bulgarian
+    # "bn": "d MMM, yyyy",  # Bengali  # disabled for now
+    "ca": "d MMM yyyy",  # Catalan
+    "cs": "d. MMM yyyy",  # Czech
+    # "da": "d. MMMM yyyy",  # Danish  # disabled for now
+    "de": "d. MMM yyyy",  # German
+    "en": "MMM. d, yyyy",  # English
+    "es": "d MMM yyyy",  # Spanish
+    "eu": "yyyy MMM d",  # Basque
+    # "fi": "d.MMMM.yyyy",  # Finnish  # disabled for now
+    "fr": "d MMM yyyy",  # French
+    "gl": "d MMM yyyy",  # Galician
+    "hr": "d. MMM yyyy.",  # Croatian
+    "it": "d MMM yyyy",  # Italian
+    "kab": "d MMM yyyy",  # Kabyle
+    "nb": "d. MMM yyyy",  # Norwegian Bokmål
+    "nl": "d MMM. yyyy",  # Dutch
+    "pl": "d MMM yyyy",  # Polish
+    "pt": "d MMM yyyy",  # Portuguese
+    "ru": "d MMM yyyy",  # Russian
+    # "sl": "d. MMMM yyyy",  # Slovenian  # disabled for now
+    # "sv": "d MMMM yyyy",  # Swedish  # disabled for now
+    # "ta": "d MMM yyyy",   # Tamil  # disabled for now
+    "tr": "d MMM yyyy",  # Turkish
+    "zh_Hans": "y年M月d日",  # Chinese (Simplified Han script)
+}
+
+SUPPORTED_LANGUAGES = list(LANGUAGES_DATE_STRING.keys())

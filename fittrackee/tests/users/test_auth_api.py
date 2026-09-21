@@ -1,0 +1,5351 @@
+import json
+from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from typing import Dict, Optional, Union
+from unittest.mock import ANY, MagicMock, Mock, call, patch
+
+import jwt
+import pytest
+from flask import Flask
+from time_machine import travel
+
+from fittrackee import db
+from fittrackee.constants import (
+    ElevationDataSource,
+    ElevationProcessing,
+    PaceSpeedDisplay,
+)
+from fittrackee.equipments.models import Equipment
+from fittrackee.reports.models import ReportActionAppeal
+from fittrackee.users.models import (
+    MAX_BIO_LIMIT,
+    MAX_USER_INPUT,
+    BlacklistedToken,
+    Notification,
+    User,
+    UserSportPreference,
+    UserTask,
+)
+from fittrackee.users.roles import UserRole
+from fittrackee.users.timezones import TIMEZONES
+from fittrackee.users.utils.tokens import get_user_token
+from fittrackee.visibility_levels import VisibilityLevel
+from fittrackee.workouts.models import Sport, Workout
+
+from ..comments.mixins import CommentMixin
+from ..mixins import (
+    ApiTestCaseMixin,
+    EquipmentMixin,
+    ImageMixin,
+    ReportMixin,
+    TokenMixin,
+    UserTaskMixin,
+)
+from ..utils import jsonify_dict
+
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64; rv:98.0) Gecko/20100101 Firefox/98.0"
+)
+
+PREFERENCES_PAYLOAD = {
+    "analysis_visibility": "followers_only",
+    "calories_visibility": "followers_only",
+    "date_format": "yyyy-MM-dd",
+    "default_tile_provider": "osm",
+    "display_ascent": False,
+    "elevation_data_source": "open_elevation",
+    "elevation_processing": "flat_window",
+    "hide_profile_in_users_directory": False,
+    "hr_visibility": "followers_only",
+    "imperial_units": True,
+    "language": "en",
+    "manually_approves_followers": False,
+    "map_visibility": "private",
+    "media_visibility": "followers_only",
+    "process_only_missing_elevations": False,
+    "segments_creation_event": "none",
+    "split_workout_charts": True,
+    "start_elevation_at_zero": False,
+    "timezone": "America/New_York",
+    "use_dark_mode": True,
+    "use_raw_gpx_speed": True,
+    "weekm": True,
+    "workout_stats_from_file": True,
+    "workouts_visibility": "public",
+}
+
+
+class TestUserRegistration(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_accepted_policy_is_missing(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_accepted_policy_is_false(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=False,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(
+            response,
+            "sorry, you must agree privacy policy to register",
+        )
+
+    def test_it_returns_error_if_username_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    @pytest.mark.parametrize(
+        "input_username_length",
+        [1, 31],
+    )
+    def test_it_returns_error_if_username_length_is_invalid(
+        self, app: Flask, input_username_length: int
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(length=input_username_length),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response, "username: 3 to 30 characters required\n")
+
+    @pytest.mark.parametrize(
+        "input_description,input_username",
+        [
+            ("account_handle", "@sam@example.com"),
+            ("with special characters", "sam*"),
+        ],
+    )
+    def test_it_returns_error_if_username_is_invalid(
+        self, app: Flask, input_description: str, input_username: str
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=input_username,
+                    email=self.random_email(),
+                    password=self.random_email(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(
+            response,
+            "username: only alphanumeric characters and "
+            'the underscore character "_" allowed\n',
+        )
+
+    @pytest.mark.parametrize(
+        "text_transformation",
+        ["upper", "lower"],
+    )
+    def test_it_returns_error_if_user_already_exists_with_same_username(
+        self, app: Flask, user_1: User, text_transformation: str
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=(
+                        user_1.username.upper()
+                        if text_transformation == "upper"
+                        else user_1.username.lower()
+                    ),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response, "sorry, that username is already taken")
+
+    def test_it_returns_error_if_password_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_password_is_too_short(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(length=7),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response, "password: 8 characters required\n")
+
+    def test_it_returns_error_if_email_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_email_is_invalid(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_string(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response, "email: valid email must be provided\n")
+
+    def test_it_does_not_send_email_after_error(
+        self, app: Flask, auth_send_email_mock: MagicMock
+    ) -> None:
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+    def test_it_returns_success_if_payload_is_valid(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert "auth_token" not in data
+
+    def test_it_creates_inactive_user_with_default_values_when_minimal_data_are_provided(  # noqa
+        self, app_with_multiple_tile_servers_enabled: Flask
+    ) -> None:
+        client = app_with_multiple_tile_servers_enabled.test_client()
+        username = self.random_string()
+
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=username,
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        new_user = User.query.filter_by(username=username).one()
+        assert new_user.role == UserRole.USER.value
+        assert new_user.is_active is False
+        # UI preferences
+        assert new_user.language == "en"
+        assert new_user.use_dark_mode is False
+        assert new_user.timezone == "Europe/Paris"
+        assert new_user.date_format == "MM/dd/yyyy"
+        assert new_user.weekm is False
+        # Account preferences
+        assert new_user.manually_approves_followers is True
+        assert new_user.hide_profile_in_users_directory is True
+        # Workouts preferences
+        assert (
+            new_user.default_tile_provider
+            == app_with_multiple_tile_servers_enabled.config[
+                "default_tile_provider"
+            ]
+        )
+        assert new_user.imperial_units is False
+        assert new_user.display_ascent is True
+        assert new_user.split_workout_charts is True
+        assert new_user.start_elevation_at_zero is True
+        assert new_user.workout_stats_from_file is False
+        assert new_user.use_raw_gpx_speed is False
+        assert new_user.elevation_data_source == ElevationDataSource.FILE
+        assert new_user.elevation_processing == ElevationProcessing.NONE
+        assert new_user.process_only_missing_elevations is True
+        assert new_user.workouts_visibility == VisibilityLevel.PRIVATE
+        assert new_user.media_visibility == VisibilityLevel.PRIVATE
+        assert new_user.analysis_visibility == VisibilityLevel.PRIVATE
+        assert new_user.map_visibility == VisibilityLevel.PRIVATE
+        assert new_user.hr_visibility == VisibilityLevel.PRIVATE
+        assert new_user.calories_visibility == VisibilityLevel.PRIVATE
+        assert new_user.segments_creation_event == "only_manual"
+        # Message and notifications preferences preferences
+        assert new_user.messages_preferences is None
+        assert new_user.notification_preferences is None
+
+    @pytest.mark.parametrize(
+        "input_timezone,expected_timezone",
+        [
+            ("Europe/Paris", "Europe/Paris"),
+            ("America/New_York", "America/New_York"),
+            ("invalid", "Europe/Paris"),
+            (None, "Europe/Paris"),
+        ],
+    )
+    def test_it_creates_user_when_timezone_is_provided(
+        self,
+        app: Flask,
+        input_timezone: Optional[str],
+        expected_timezone: str,
+    ) -> None:
+        """
+        When value is invalid, it defaults to 'Europe/Paris'
+        """
+        client = app.test_client()
+        username = self.random_string()
+        email = self.random_email()
+        accepted_policy_date = datetime.now(timezone.utc)
+
+        with travel(accepted_policy_date, tick=False):
+            client.post(
+                "/api/auth/register",
+                data=json.dumps(
+                    dict(
+                        username=username,
+                        email=email,
+                        password=self.random_string(),
+                        timezone=input_timezone,
+                        accepted_policy=True,
+                    )
+                ),
+                content_type="application/json",
+            )
+
+        new_user = User.query.filter_by(username=username).one()
+        assert new_user.timezone == expected_timezone
+
+    @pytest.mark.parametrize(
+        "input_language,expected_language",
+        [("en", "en"), ("fr", "fr"), ("invalid", "en"), (None, "en")],
+    )
+    def test_it_creates_user_when_language_is_provided(
+        self,
+        app: Flask,
+        input_language: Optional[str],
+        expected_language: str,
+    ) -> None:
+        """
+        When value is invalid, it defaults to 'en'
+        """
+        client = app.test_client()
+        username = self.random_string()
+        email = self.random_email()
+        accepted_policy_date = datetime.now(timezone.utc)
+
+        with travel(accepted_policy_date, tick=False):
+            client.post(
+                "/api/auth/register",
+                data=json.dumps(
+                    dict(
+                        username=username,
+                        email=email,
+                        password=self.random_string(),
+                        language=input_language,
+                        accepted_policy=True,
+                    )
+                ),
+                content_type="application/json",
+            )
+
+        new_user = User.query.filter_by(username=username).one()
+        assert new_user.language == expected_language
+
+    @pytest.mark.parametrize(
+        "input_language,expected_language",
+        [("en", "en"), ("fr", "fr"), ("invalid", "en"), (None, "en")],
+    )
+    def test_it_calls_send_email_for_account_confirmation_when_payload_is_valid(  # noqa
+        self,
+        app: Flask,
+        auth_send_email_mock: MagicMock,
+        input_language: Optional[str],
+        expected_language: str,
+    ) -> None:
+        client = app.test_client()
+        email = self.random_email()
+        username = self.random_string()
+        expected_token = self.random_string()
+
+        with patch("secrets.token_urlsafe", return_value=expected_token):
+            client.post(
+                "/api/auth/register",
+                data=json.dumps(
+                    dict(
+                        username=username,
+                        email=email,
+                        password="12345678",
+                        language=input_language,
+                        accepted_policy=True,
+                    )
+                ),
+                content_type="application/json",
+                environ_base={"HTTP_USER_AGENT": USER_AGENT},
+            )
+
+        auth_send_email_mock.send.assert_called_once_with(
+            {
+                "language": expected_language,
+                "email": email,
+            },
+            {
+                "username": username,
+                "fittrackee_url": app.config["UI_URL"],
+                "operating_system": "Linux",
+                "browser_name": "Firefox",
+                "account_confirmation_url": (
+                    f"{app.config['UI_URL']}/account-confirmation"
+                    f"?token={expected_token}"
+                ),
+            },
+            template="account_confirmation",
+        )
+
+    def test_it_does_not_call_send_email_for_account_confirmation_when_email_sending_is_disabled(  # noqa
+        self,
+        app_wo_email_activation: Flask,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client = app_wo_email_activation.test_client()
+        email = self.random_email()
+        username = self.random_string()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=username,
+                    email=email,
+                    password="12345678",
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+            environ_base={"HTTP_USER_AGENT": USER_AGENT},
+        )
+
+        assert response.status_code == 200
+        auth_send_email_mock.send.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "text_transformation",
+        ["upper", "lower"],
+    )
+    def test_it_does_not_return_error_if_a_user_already_exists_with_same_email(
+        self, app: Flask, user_1: User, text_transformation: str
+    ) -> None:
+        client = app.test_client()
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=(
+                        user_1.email.upper()
+                        if text_transformation == "upper"
+                        else user_1.email.lower()
+                    ),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert "auth_token" not in data
+
+    def test_it_does_not_call_send_email_for_account_confirmation_if_user_already_exists(  # noqa
+        self, app: Flask, user_1: User, auth_send_email_mock: MagicMock
+    ) -> None:
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=user_1.email,
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+    def test_it_creates_notifications_for_admins_on_registration(
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2_admin: User,
+        user_3: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        email = self.random_email()
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=email,
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        new_user = User.query.filter_by(email=email).one()
+        notifications = Notification.query.filter_by(
+            event_type="account_creation", event_object_id=new_user.id
+        ).all()
+        assert len(notifications) == 2
+        for notification in notifications:
+            assert notification.created_at == new_user.created_at
+            assert notification.from_user_id == new_user.id
+            assert notification.event_object_id == new_user.id
+            assert notification.to_user_id in [
+                user_1_admin.id,
+                user_2_admin.id,
+            ]
+
+    def test_it_does_not_create_notifications_for_admin_when_disabled_in_preferences(  # noqa
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2_admin: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        user_1_admin.update_notification_preferences(
+            {"account_creation": False}
+        )
+        email = self.random_email()
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=email,
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        new_user = User.query.filter_by(email=email).one()
+        notifications = Notification.query.filter_by(
+            event_type="account_creation", event_object_id=new_user.id
+        ).all()
+        assert len(notifications) == 1
+        assert notifications[0].to_user_id == user_2_admin.id
+
+
+class TestUserLogin(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/login",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_user_does_not_exist(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/login",
+            data=json.dumps(
+                dict(email=self.random_email(), password=self.random_string())
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_401(response, "invalid credentials")
+
+    def test_it_returns_error_if_user_account_is_inactive(
+        self, app: Flask, inactive_user: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/login",
+            data=json.dumps(
+                dict(email=inactive_user.email, password="12345678")
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_401(response, "invalid credentials")
+
+    def test_it_returns_error_if_password_is_invalid(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/login",
+            data=json.dumps(
+                dict(email=user_1.email, password=self.random_email())
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_401(response, "invalid credentials")
+
+    @pytest.mark.parametrize(
+        "text_transformation",
+        ["upper", "lower"],
+    )
+    def test_user_can_login_regardless_username_case(
+        self, app: Flask, user_1: User, text_transformation: str
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/login",
+            data=json.dumps(
+                dict(
+                    email=(
+                        user_1.email.upper()
+                        if text_transformation == "upper"
+                        else user_1.email.lower()
+                    ),
+                    password="12345678",
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "successfully logged in"
+        assert data["auth_token"]
+
+
+class TestUserProfile(ApiTestCaseMixin, TokenMixin):
+    def test_it_returns_error_if_auth_token_is_missing(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.get("/api/auth/profile")
+
+        self.assert_401(response, "provide a valid auth token")
+
+    def test_it_returns_error_if_auth_token_is_invalid(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.get(
+            "/api/auth/profile", headers=dict(Authorization="Bearer invalid")
+        )
+
+        self.assert_invalid_token(response)
+
+    def test_it_returns_error_if_token_is_blacklisted(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        db.session.add(BlacklistedToken(token=auth_token))
+        db.session.commit()
+
+        response = client.get(
+            "/api/auth/profile",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_invalid_token(response)
+
+    def test_it_returns_error_if_token_without_jti_is_blacklisted(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client = app.test_client()
+        auth_token = self.generate_token_without_jti(app, user_1.id)
+        db.session.add(BlacklistedToken(token=auth_token))
+        db.session.commit()
+
+        response = client.get(
+            "/api/auth/profile",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_invalid_token(response)
+
+    def test_it_returns_user(self, app: Flask, user_1: User) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            "/api/auth/profile",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["data"] == jsonify_dict(
+            user_1.serialize(current_user=user_1, light=False)
+        )
+
+    def test_it_returns_suspended_user(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.get(
+            "/api/auth/profile",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["data"] == jsonify_dict(
+            suspended_user.serialize(current_user=suspended_user, light=False)
+        )
+
+    def test_expected_scope_is_profile_read(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="get",
+            endpoint="/api/auth/profile",
+            invalid_scope="profile:write",
+            expected_endpoint_scope="profile:read",
+        )
+
+
+class TestUserProfileUpdate(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit",
+            content_type="application/json",
+            data=json.dumps(dict()),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_fields_are_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit",
+            content_type="application/json",
+            data=json.dumps(dict(first_name=self.random_string())),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_user_profile(self, app: Flask, user_1: User) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        first_name = self.random_string()
+        last_name = self.random_string()
+        location = self.random_string()
+        bio = self.random_string()
+        birth_date = "1980-01-01"
+
+        response = client.post(
+            "/api/auth/profile/edit",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    first_name=first_name,
+                    last_name=last_name,
+                    location=location,
+                    bio=bio,
+                    birth_date=birth_date,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user profile updated"
+        assert data["data"] == jsonify_dict(
+            user_1.serialize(current_user=user_1, light=False)
+        )
+
+    def test_it_updates_suspended_user_profile(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+        first_name = self.random_string()
+        last_name = self.random_string()
+        location = self.random_string()
+        bio = self.random_string()
+        birth_date = "1980-01-01"
+
+        response = client.post(
+            "/api/auth/profile/edit",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    first_name=first_name,
+                    last_name=last_name,
+                    location=location,
+                    bio=bio,
+                    birth_date=birth_date,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user profile updated"
+        assert data["data"] == jsonify_dict(
+            suspended_user.serialize(current_user=suspended_user, light=False)
+        )
+
+    @pytest.mark.parametrize(
+        "input_data,max_limit",
+        [
+            ("first_name", MAX_USER_INPUT),
+            ("last_name", MAX_USER_INPUT),
+            ("location", MAX_USER_INPUT),
+            ("bio", MAX_BIO_LIMIT),
+        ],
+    )
+    def test_it_returns_error_when_user_input_exceeds_max_limit(
+        self, app: Flask, user_1: User, input_data: str, max_limit: int
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        data = {
+            "first_name": self.random_string(),
+            "last_name": self.random_string(),
+            "location": self.random_string(),
+            "bio": self.random_string(),
+            "birth_date": "1980-01-01",
+            input_data: self.random_string(max_limit + 1),
+        }
+
+        response = client.post(
+            "/api/auth/profile/edit",
+            content_type="application/json",
+            json=data,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(
+            response,
+            error_message=f"{input_data} exceeds {max_limit} characters",
+        )
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint="/api/auth/profile/edit",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserAccountUpdate(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(dict()),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_current_password_is_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, error_message="current password is missing")
+
+    def test_it_returns_error_if_email_is_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "email is missing")
+
+    def test_it_returns_error_if_current_password_is_invalid(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password=self.random_string(),
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_401(response, error_message="invalid credentials")
+
+    def test_it_does_not_send_emails_when_error_occurs(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password=self.random_string(),
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+    def test_it_does_not_return_error_if_no_new_password_provided(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user account updated"
+
+    def test_it_does_not_send_emails_if_no_change(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+    def test_it_returns_error_if_new_email_is_invalid(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=self.random_string(),
+                    password="12345678",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "email: valid email must be provided\n")
+
+    def test_it_only_updates_email_to_confirm_if_new_email_provided(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        current_email = user_1.email
+        new_email = "new.email@example.com"
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=new_email,
+                    password="12345678",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert current_email == user_1.email
+        assert new_email == user_1.email_to_confirm
+        assert user_1.confirmation_token is not None
+
+    def test_it_updates_email_when_email_sending_is_disabled(
+        self,
+        app_wo_email_activation: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_wo_email_activation, user_1.email
+        )
+        new_email = "new.email@example.com"
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=new_email,
+                    password="12345678",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert user_1.email == new_email
+        assert user_1.email_to_confirm is None
+        assert user_1.confirmation_token is None
+
+    def test_it_calls_send_email_for_current_and_new_email_when_new_email_provided(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        new_email = "new.email@example.com"
+        expected_token = self.random_string()
+
+        with patch("secrets.token_urlsafe", return_value=expected_token):
+            client.patch(
+                "/api/auth/profile/edit/account",
+                content_type="application/json",
+                data=json.dumps(
+                    dict(
+                        email=new_email,
+                        password="12345678",
+                    )
+                ),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+                environ_base={"HTTP_USER_AGENT": USER_AGENT},
+            )
+
+        auth_send_email_mock.send.assert_has_calls(
+            [
+                call(
+                    {
+                        "language": "en",
+                        "email": user_1.email,
+                    },
+                    {
+                        "username": user_1.username,
+                        "fittrackee_url": app.config["UI_URL"],
+                        "operating_system": "Linux",
+                        "browser_name": "Firefox",
+                        "new_email_address": new_email,
+                    },
+                    template="email_update_to_current_email",
+                ),
+                call(
+                    {
+                        "language": "en",
+                        "email": user_1.email_to_confirm,
+                    },
+                    {
+                        "username": user_1.username,
+                        "fittrackee_url": app.config["UI_URL"],
+                        "operating_system": "Linux",
+                        "browser_name": "Firefox",
+                        "email_confirmation_url": (
+                            f"{app.config['UI_URL']}/email-update"
+                            f"?token={expected_token}"
+                        ),
+                    },
+                    template="email_update_to_new_email",
+                ),
+            ]
+        )
+
+    def test_it_returns_error_if_controls_fail_on_new_password(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                    new_password=self.random_string(length=3),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "password: 8 characters required")
+
+    def test_it_updates_auth_user_password_when_new_password_provided(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        current_hashed_password = user_1.password
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user account updated"
+        assert current_hashed_password != user_1.password
+
+    def test_it_updates_password_when_user_is_suspended(
+        self,
+        app: Flask,
+        suspended_user: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+        current_hashed_password = suspended_user.password
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=suspended_user.email,
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user account updated"
+        assert current_hashed_password != suspended_user.password
+
+    def test_new_password_is_hashed(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        new_password = self.random_string()
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                    new_password=new_password,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert new_password != user_1.password
+
+    def test_it_calls_send_email_for_password_change_when_new_password_is_provided(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=user_1.email,
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+            environ_base={"HTTP_USER_AGENT": USER_AGENT},
+        )
+
+        # it does not call auth_send_email_mock with
+        # "email_updated_to_current_address" and "email_updated_to_new_address"
+        auth_send_email_mock.send.assert_called_once_with(
+            {
+                "language": "en",
+                "email": user_1.email,
+            },
+            {
+                "username": user_1.username,
+                "fittrackee_url": app.config["UI_URL"],
+                "operating_system": "Linux",
+                "browser_name": "Firefox",
+            },
+            template="password_change",
+        )
+
+    def test_it_updates_email_to_confirm_and_password_when_new_email_and_password_provided(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        current_email = user_1.email
+        current_hashed_password = user_1.password
+        new_email = "new.email@example.com"
+
+        response = client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email=new_email,
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user account updated"
+        assert user_1.email == current_email
+        assert user_1.email_to_confirm == new_email
+        assert user_1.password != current_hashed_password
+
+    def test_it_calls_email_send_for_all_mails_when_new_email_and_password_provided(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email="new.email@example.com",
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        auth_send_email_mock.send.assert_has_calls(
+            [
+                call(
+                    ANY,
+                    ANY,
+                    template="password_change",
+                ),
+                call(
+                    ANY,
+                    ANY,
+                    template="email_update_to_current_email",
+                ),
+                call(
+                    ANY,
+                    ANY,
+                    template="email_update_to_new_email",
+                ),
+            ]
+        )
+
+    def test_it_does_not_call_email_send_for_all_mails_when_email_sending_is_disabled(  # noqa
+        self,
+        app_wo_email_activation: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_wo_email_activation, user_1.email
+        )
+
+        client.patch(
+            "/api/auth/profile/edit/account",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    email="new.email@example.com",
+                    password="12345678",
+                    new_password=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="patch",
+            endpoint="/api/auth/profile/edit/account",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserPreferencesUpdate(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            data=json.dumps(dict()),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    @pytest.mark.parametrize("missing_key", [*PREFERENCES_PAYLOAD.keys()])
+    def test_it_returns_error_if_a_key_is_missing(
+        self, app: Flask, user_1: User, missing_key: str
+    ) -> None:
+        payload = {**PREFERENCES_PAYLOAD}
+        del payload[missing_key]
+
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json=payload,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_user_preferences(
+        self, app_with_open_elevation_url: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_open_elevation_url, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json=PREFERENCES_PAYLOAD,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        for key, value in PREFERENCES_PAYLOAD.items():
+            assert getattr(user_1, key) == value
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user preferences updated"
+        assert data["data"] == jsonify_dict(
+            user_1.serialize(current_user=user_1, light=False)
+        )
+
+    @pytest.mark.parametrize(
+        "input_language,expected_language",
+        [("en", "en"), ("fr", "fr"), ("invalid", "en"), (None, "en")],
+    )
+    def test_it_updates_language_preference(
+        self,
+        app_with_open_elevation_url: Flask,
+        user_1: User,
+        input_language: Optional[str],
+        expected_language: str,
+    ) -> None:
+        payload = {
+            **PREFERENCES_PAYLOAD,
+            "language": input_language,
+        }
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_open_elevation_url, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json=payload,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert user_1.language == expected_language
+        data = json.loads(response.data.decode())
+        assert data["data"]["language"] == expected_language
+
+    def test_it_updates_user_preferences_with_deprecated_key(
+        self, app_with_open_elevation_url: Flask, user_1: User
+    ) -> None:
+        payload = {
+            **PREFERENCES_PAYLOAD,
+            "missing_elevations_processing": "open_elevation",
+        }
+        del payload["elevation_data_source"]
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_open_elevation_url, user_1.email
+        )
+
+        with patch("fittrackee.users.auth.appLog") as logger_mock:
+            response = client.post(
+                "/api/auth/profile/edit/preferences",
+                content_type="application/json",
+                json=payload,
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert (
+            user_1.elevation_data_source
+            == ElevationDataSource.OPEN_ELEVATION.value
+        )
+        logger_mock.warning.assert_called_once_with(
+            "'missing_elevations_processing' is deprecated, "
+            "please use 'elevation_data_source' instead."
+        )
+
+    def test_it_updates_user_preferences_with_missing_elevations_processing_when_both_keys_are_provided(  # noqa
+        self, app_with_open_elevation_and_valhalla_url: Flask, user_1: User
+    ) -> None:
+        """
+        'missing_elevations_processing' is ignored
+        """
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_open_elevation_and_valhalla_url, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "missing_elevations_processing": "valhalla",
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert user_1.elevation_data_source == (
+            ElevationDataSource.OPEN_ELEVATION.value
+        )
+        assert user_1.elevation_processing == (
+            ElevationProcessing.FLAT_WINDOW.value
+        )
+        data = json.loads(response.data.decode())
+        assert data["data"]["elevation_data_source"] == "open_elevation"
+        assert data["data"]["elevation_processing"] == "flat_window"
+
+    @pytest.mark.parametrize(
+        "input_map_visibility,input_analysis_visibility,"
+        "input_workout_visibility,"
+        "expected_map_visibility,expected_analysis_visibility",
+        [
+            (
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+            ),
+            (
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.PRIVATE,
+            ),
+            (
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.FOLLOWERS,
+            ),
+            (
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+            ),
+        ],
+    )
+    def test_it_updates_user_preferences_with_valid_map_visibility(
+        self,
+        app: Flask,
+        user_1: User,
+        input_map_visibility: VisibilityLevel,
+        input_analysis_visibility: VisibilityLevel,
+        input_workout_visibility: VisibilityLevel,
+        expected_map_visibility: VisibilityLevel,
+        expected_analysis_visibility: VisibilityLevel,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "map_visibility": input_map_visibility.value,
+                "analysis_visibility": input_analysis_visibility.value,
+                "workouts_visibility": input_workout_visibility.value,
+                "hr_visibility": input_workout_visibility.value,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert user_1.map_visibility == expected_map_visibility.value
+        assert user_1.analysis_visibility == expected_analysis_visibility.value
+        assert user_1.workouts_visibility == input_workout_visibility.value
+        data = json.loads(response.data.decode())
+        assert data["data"]["map_visibility"] == expected_map_visibility.value
+        assert (
+            data["data"]["analysis_visibility"]
+            == expected_analysis_visibility.value
+        )
+        assert (
+            data["data"]["workouts_visibility"]
+            == input_workout_visibility.value
+        )
+
+    @pytest.mark.parametrize(
+        "input_workout_visibility, input_media_visibility,"
+        "expected_media_visibility",
+        [
+            (
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.PUBLIC,
+            ),
+            (
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.FOLLOWERS,
+            ),
+            (
+                VisibilityLevel.PRIVATE,
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.PRIVATE,
+            ),
+            (
+                VisibilityLevel.FOLLOWERS,
+                VisibilityLevel.PUBLIC,
+                VisibilityLevel.FOLLOWERS,
+            ),
+        ],
+    )
+    def test_it_updates_user_preferences_with_valid_media_visibility(
+        self,
+        app: Flask,
+        user_1: User,
+        input_workout_visibility: VisibilityLevel,
+        input_media_visibility: VisibilityLevel,
+        expected_media_visibility: VisibilityLevel,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "workouts_visibility": input_workout_visibility.value,
+                "media_visibility": expected_media_visibility.value,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert user_1.media_visibility == expected_media_visibility.value
+        assert user_1.workouts_visibility == input_workout_visibility.value
+        data = json.loads(response.data.decode())
+        assert (
+            data["data"]["workouts_visibility"]
+            == input_workout_visibility.value
+        )
+        assert (
+            data["data"]["media_visibility"] == expected_media_visibility.value
+        )
+
+    def test_it_updates_user_preferences_when_user_is_suspended(
+        self,
+        app: Flask,
+        suspended_user: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "analysis_visibility": VisibilityLevel.PUBLIC.value,
+                "map_visibility": VisibilityLevel.PUBLIC.value,
+                "workouts_visibility": VisibilityLevel.PUBLIC.value,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(suspended_user)
+        assert suspended_user.map_visibility == VisibilityLevel.PUBLIC.value
+        assert suspended_user.analysis_visibility == (
+            VisibilityLevel.PUBLIC.value
+        )
+        assert suspended_user.workouts_visibility == (
+            VisibilityLevel.PUBLIC.value
+        )
+
+    def test_it_updates_default_tile_provider(
+        self,
+        app_with_multiple_tile_servers_enabled: Flask,
+        user_1: User,
+    ) -> None:
+        default_tile_provider = "cyclosm"
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_multiple_tile_servers_enabled, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "default_tile_provider": default_tile_provider,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        db.session.refresh(user_1)
+        assert user_1.default_tile_provider == default_tile_provider
+        data = json.loads(response.data.decode())
+        assert data["data"]["default_tile_provider"] == default_tile_provider
+
+    def test_it_returns_400_when_default_tile_provider_is_invalid(
+        self,
+        app_with_multiple_tile_servers_enabled: Flask,
+        user_1: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_multiple_tile_servers_enabled, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "default_tile_provider": "invalid",
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "tile provider 'invalid' does not exist")
+
+    def test_it_returns_400_when_default_tile_provider_is_not_enabled(
+        self,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            json={
+                **PREFERENCES_PAYLOAD,
+                "default_tile_provider": "cyclosm",
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "tile provider 'cyclosm' does not exist")
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint="/api/auth/profile/edit/preferences",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserSportPreferencesUpdate(ApiTestCaseMixin, EquipmentMixin):
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(dict()),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_sport_id_is_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(dict(is_active=True)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_sport_not_found(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(dict(sport_id=1, is_active=True)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_entity(response, "sport")
+
+    def test_it_returns_error_if_payload_contains_only_sport_id(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(dict(sport_id=1)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_color_is_invalid(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    color=self.random_string(),
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "invalid hexadecimal color")
+
+    def test_it_returns_error_when_user_is_suspended(
+        self,
+        app: Flask,
+        suspended_user: User,
+        sport_2_running: Sport,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    color="#000000",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_403(response)
+
+    @pytest.mark.parametrize(
+        "input_color",
+        ["#000000", "#FFF"],
+    )
+    def test_it_updates_sport_color_for_auth_user(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        input_color: str,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    color=input_color,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.color == input_color
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"] == preference.serialize()
+
+    def test_it_creates_preference_and_gets_default_value_from_original_sport(
+        self, app: Flask, user_1: User, sport_2_running: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    color="#FFF",
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_2_running.id, user_id=user_1.id
+        ).one()
+        assert preference.color == "#FFF"
+        assert (
+            preference.pace_speed_display == sport_2_running.pace_speed_display
+        )
+        assert (
+            preference.stopped_speed_threshold
+            == sport_2_running.stopped_speed_threshold
+        )
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"] == preference.serialize()
+
+    def test_it_updates_default_equipments_for_auth_user_without_existing_preferences(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        equipment_bike_user_1: Equipment,
+        equipment_shoes_user_1: Equipment,
+        sport_2_running: Sport,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    default_equipment_ids=[equipment_shoes_user_1.short_id],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_2_running.id, user_id=user_1.id
+        ).one()
+        assert preference.default_equipments.all() == [equipment_shoes_user_1]
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["default_equipments"] == [
+            jsonify_dict(equipment_shoes_user_1.serialize(current_user=user_1))
+        ]
+
+    def test_it_updates_default_equipments_for_auth_user_with_existing_preferences(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        equipment_bike_user_1: Equipment,
+        equipment_shoes_user_1: Equipment,
+        user_1_sport_1_preference: UserSportPreference,
+    ) -> None:
+        self.add_user_sport_preference_equipement(
+            [equipment_shoes_user_1, equipment_bike_user_1],
+            user_1_sport_1_preference,
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    default_equipment_ids=[
+                        equipment_bike_user_1.short_id,
+                    ],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.default_equipments.all() == [equipment_bike_user_1]
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["default_equipments"] == [
+            jsonify_dict(equipment_bike_user_1.serialize(current_user=user_1))
+        ]
+
+    def test_it_does_not_update_equipment_when_ids_not_provided(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        equipment_bike_user_1: Equipment,
+        equipment_shoes_user_1: Equipment,
+        user_1_sport_1_preference: UserSportPreference,
+    ) -> None:
+        self.add_user_sport_preference_equipement(
+            [equipment_bike_user_1], user_1_sport_1_preference
+        )
+        stopped_speed_threshold = 10
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    stopped_speed_threshold=stopped_speed_threshold,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.default_equipments.all() == [equipment_bike_user_1]
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["default_equipments"] == [
+            jsonify_dict(equipment_bike_user_1.serialize(current_user=user_1))
+        ]
+
+    def test_it_cannot_update_default_equipment_for_other_user_equip(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+        equipment_shoes_user_1: Equipment,
+        sport_2_running: Sport,
+    ) -> None:
+        # equipment_shoes_user_1 is owned by user 1
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    default_equipment_ids=[equipment_shoes_user_1.short_id],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data.decode())
+        assert data["equipment_id"] == equipment_shoes_user_1.short_id
+        assert data["message"] == (
+            f"equipment with id {equipment_shoes_user_1.short_id} "
+            "does not exist"
+        )
+        assert data["status"] == "not_found"
+
+    def test_it_returns_error_when_equipment_is_invalid_for_given_sport(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_2_running: Sport,
+        equipment_bike_user_1: Equipment,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    default_equipment_ids=[equipment_bike_user_1.short_id],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 400
+        data = json.loads(response.data.decode())
+        assert data["equipment_id"] == equipment_bike_user_1.short_id
+        assert data["message"] == (
+            f"invalid equipment id {equipment_bike_user_1.short_id} "
+            f"for sport {sport_2_running.label}"
+        )
+        assert data["status"] == "invalid"
+
+    def test_it_returns_400_when_multiple_pieces_of_equipment_with_same_type_are_provided(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        sport_2_running: Sport,
+        equipment_shoes_user_1: Equipment,
+        equipment_another_shoes_user_1: Equipment,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    default_equipment_ids=[
+                        equipment_shoes_user_1.short_id,
+                        equipment_another_shoes_user_1.short_id,
+                    ],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(
+            response, "only one piece of equipment per type can be provided"
+        )
+
+    def test_it_creates_preference_with_multiple_pieces_of_equipment(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        equipment_shoes_user_1: Equipment,
+        equipment_bike_user_1: Equipment,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    default_equipment_ids=[
+                        equipment_shoes_user_1.short_id,
+                        equipment_bike_user_1.short_id,
+                    ],
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert set(preference.default_equipments) == {
+            equipment_shoes_user_1,
+            equipment_bike_user_1,
+        }
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert len(data["data"]["default_equipments"]) == 2
+
+    def test_it_disables_sport_for_auth_user(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    is_active=False,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.is_active is False
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["is_active"] is False
+
+    def test_it_updates_stopped_speed_threshold_for_auth_user(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    stopped_speed_threshold=0.5,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.stopped_speed_threshold == 0.5
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["stopped_speed_threshold"] == 0.5
+
+    @pytest.mark.parametrize(
+        "input_stopped_speed_threshold", [0, -0.1, "invalid"]
+    )
+    def test_it_returns_error_when_stopped_speed_threshold_is_invalid(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        input_stopped_speed_threshold: Union[int, float],
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    stopped_speed_threshold=input_stopped_speed_threshold,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(
+            response,
+            "'stopped_speed_threshold' must be an integer greater then 0",
+        )
+
+    def test_it_updates_pace_speed_display_for_sport_with_pace(
+        self, app: Flask, user_1: User, sport_2_running: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_2_running.id,
+                    pace_speed_display=PaceSpeedDisplay.PACE_AND_SPEED,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_2_running.id, user_id=user_1.id
+        ).one()
+        assert preference.pace_speed_display == PaceSpeedDisplay.PACE_AND_SPEED
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["pace_speed_display"] == (
+            PaceSpeedDisplay.PACE_AND_SPEED
+        )
+
+    def test_it_updates_pace_speed_display_for_sport_without_pace(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    pace_speed_display=PaceSpeedDisplay.SPEED,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.pace_speed_display == PaceSpeedDisplay.SPEED
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+        assert data["data"]["pace_speed_display"] == (PaceSpeedDisplay.SPEED)
+
+    def test_it_returns_error_when_pace_speed_display_is_invalid(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    pace_speed_display=PaceSpeedDisplay.PACE_AND_SPEED,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 400
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.pace_speed_display == PaceSpeedDisplay.SPEED
+        data = json.loads(response.data.decode())
+        assert data["status"] == "error"
+        assert data["message"] == (
+            "invalid pace_speed_display for sport 'Cycling (Sport)', "
+            "only speed can be displayed."
+        )
+
+    def test_it_updates_preferences_with_deprecated_post_method(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        with patch("fittrackee.users.auth.appLog") as logger_mock:
+            response = client.post(
+                "/api/auth/profile/edit/sports",
+                content_type="application/json",
+                data=json.dumps(
+                    dict(
+                        sport_id=sport_1_cycling.id,
+                        stopped_speed_threshold=0.5,
+                    )
+                ),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        data = json.loads(response.data.decode())
+        assert data["data"]["stopped_speed_threshold"] == 0.5
+        logger_mock.warning.assert_called_once_with(
+            "'POST' method is deprecated for /api/auth/profile/edit/sports, "
+            "please use 'PATCH' instead."
+        )
+
+    def test_it_updates_visibility_levels(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    workouts_visibility=VisibilityLevel.PUBLIC.value,
+                    analysis_visibility=VisibilityLevel.FOLLOWERS.value,
+                    map_visibility=VisibilityLevel.PRIVATE.value,
+                    media_visibility=VisibilityLevel.FOLLOWERS.value,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.workouts_visibility == VisibilityLevel.PUBLIC
+        assert preference.analysis_visibility == VisibilityLevel.FOLLOWERS
+        assert preference.map_visibility == VisibilityLevel.PRIVATE
+        assert preference.media_visibility == VisibilityLevel.FOLLOWERS
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+
+    def test_it_updates_visibility_levels_with_valid_value(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.patch(
+            "/api/auth/profile/edit/sports",
+            content_type="application/json",
+            data=json.dumps(
+                dict(
+                    sport_id=sport_1_cycling.id,
+                    workouts_visibility=VisibilityLevel.FOLLOWERS.value,
+                    map_visibility=VisibilityLevel.PUBLIC.value,
+                )
+            ),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        preference = UserSportPreference.query.filter_by(
+            sport_id=sport_1_cycling.id, user_id=user_1.id
+        ).one()
+        assert preference.workouts_visibility == VisibilityLevel.FOLLOWERS
+        assert preference.analysis_visibility == VisibilityLevel.PRIVATE
+        # map_visibility can not be public when analysis_visibility is private
+        assert preference.map_visibility == VisibilityLevel.PRIVATE
+        assert preference.media_visibility == VisibilityLevel.PRIVATE
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user sport preferences updated"
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint="/api/auth/profile/edit/sports",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserSportPreferencesReset(ApiTestCaseMixin):
+    def test_it_returns_error_if_sport_does_not_exist(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.delete(
+            "/api/auth/profile/reset/sports/1",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_entity(response, "sport")
+
+    def test_it_resets_sport_preferences(
+        self,
+        app: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        user_1_sport_1_preference: UserSportPreference,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.delete(
+            f"/api/auth/profile/reset/sports/{sport_1_cycling.id}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 204
+        assert (
+            UserSportPreference.query.filter_by(
+                user_id=user_1.id,
+                sport_id=sport_1_cycling.id,
+            ).first()
+            is None
+        )
+
+    def test_it_returns_error_when_user_is_suspended(
+        self,
+        app: Flask,
+        suspended_user: User,
+        sport_1_cycling: Sport,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.delete(
+            f"/api/auth/profile/reset/sports/{sport_1_cycling.id}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_403(response)
+
+    def test_it_does_not_raise_error_if_sport_preferences_do_not_exist(
+        self, app: Flask, user_1: User, sport_1_cycling: Sport
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.delete(
+            f"/api/auth/profile/reset/sports/{sport_1_cycling.id}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 204
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="delete",
+            endpoint=f"/api/auth/profile/reset/sports/{self.random_int()}",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserPicture(ApiTestCaseMixin, ImageMixin):
+    def test_it_returns_error_if_file_is_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        self.assert_400(response, "no file part", "fail")
+
+    def test_it_returns_error_if_file_is_invalid(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            data=dict(file=(BytesIO(b"avatar"), "avatar.bmp")),
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        self.assert_400(response, "file extension not allowed", "fail")
+
+    def test_it_returns_error_if_image_size_exceeds_file_limit(
+        self,
+        app_with_max_image_size: Flask,
+        user_1: User,
+        sport_1_cycling: Sport,
+        gpx_file: str,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_max_image_size, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            data=dict(
+                file=(BytesIO(b"test_file_for_avatar" * 50), "avatar.jpg")
+            ),
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        data = self.assert_413(
+            response,
+            "Error during picture upload, file size (1.2KB) exceeds 1.0KB.",
+        )
+        assert "data" not in data
+
+    def test_it_updates_user_picture(self, app: Flask, user_1: User) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        filename = "27dc1a4e6f0246b.png"
+
+        with patch(
+            "fittrackee.users.auth.generate_filename", return_value=filename
+        ):
+            response = client.post(
+                "/api/auth/picture",
+                data=dict(file=(self.get_image_content(app), "avatar.png")),
+                headers=dict(
+                    content_type="multipart/form-data",
+                    Authorization=f"Bearer {auth_token}",
+                ),
+            )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user picture updated"
+        assert response.status_code == 200
+        assert user_1.picture is not None
+        assert filename in user_1.picture
+
+    def test_suspended_user_can_update_picture(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            data=dict(file=(self.get_image_content(app), "avatar.png")),
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user picture updated"
+        assert response.status_code == 200
+        assert suspended_user.picture is not None
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint="/api/auth/picture",
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserDeletePicture(ApiTestCaseMixin, ImageMixin):
+    def test_user_can_delete_picture(self, app: Flask, user_1: User) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            data=dict(file=(self.get_image_content(app), "avatar.png")),
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user picture updated"
+        assert response.status_code == 200
+        assert user_1.picture is not None
+
+        response = client.delete(
+            "/api/auth/picture",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 204
+        assert user_1.picture is None
+
+    def test_it_does_not_return_error_when_user_has_no_picture(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.delete(
+            "/api/auth/picture",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 204
+        assert user_1.picture is None
+
+    def test_suspended_user_can_delete_picture(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.post(
+            "/api/auth/picture",
+            data=dict(file=(self.get_image_content(app), "avatar.png")),
+            headers=dict(
+                content_type="multipart/form-data",
+                Authorization=f"Bearer {auth_token}",
+            ),
+        )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "user picture updated"
+        assert response.status_code == 200
+        assert suspended_user.picture is not None
+
+        response = client.delete(
+            "/api/auth/picture",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 204
+        assert suspended_user.picture is None
+
+
+class TestRegistrationConfiguration(ApiTestCaseMixin):
+    def test_it_returns_error_if_it_exceeds_max_users(
+        self,
+        app_with_3_users_max: Flask,
+        user_1_admin: User,
+        user_2: User,
+        user_3: User,
+    ) -> None:
+        client = app_with_3_users_max.test_client()
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_403(response, "error, registration is disabled")
+
+    def test_it_disables_registration_on_user_registration(
+        self,
+        app_with_3_users_max: Flask,
+        user_1_admin: User,
+        user_2: User,
+    ) -> None:
+        client = app_with_3_users_max.test_client()
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_403(response, "error, registration is disabled")
+
+    def test_it_does_not_disable_registration_if_users_count_below_limit(
+        self,
+        app_with_3_users_max: Flask,
+        user_1: User,
+    ) -> None:
+        client = app_with_3_users_max.test_client()
+        client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        response = client.post(
+            "/api/auth/register",
+            data=json.dumps(
+                dict(
+                    username=self.random_string(),
+                    email=self.random_email(),
+                    password=self.random_string(),
+                    accepted_policy=True,
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+
+
+class TestPasswordResetRequest(ApiTestCaseMixin):
+    def test_it_returns_error_on_empty_payload(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_on_invalid_payload(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(username=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_when_email_sending_is_disabled(
+        self, app_wo_email_activation: Flask
+    ) -> None:
+        client = app_wo_email_activation.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(email="test@test.com")),
+            content_type="application/json",
+        )
+
+        self.assert_404_with_message(
+            response, "the requested URL was not found on the server"
+        )
+
+    def test_it_requests_password_reset_when_user_exists(
+        self, app: Flask, user_1: User, auth_send_email_mock: Mock
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(email="test@test.com")),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "password reset request processed"
+
+    def test_it_requests_password_reset_when_user_is_suspended(
+        self, app: Flask, suspended_user: User, auth_send_email_mock: Mock
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(email=suspended_user.email)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "password reset request processed"
+
+    def test_it_calls_send_email_for_password_reset_request_when_user_exists(
+        self, app: Flask, user_1: User, auth_send_email_mock: Mock
+    ) -> None:
+        client = app.test_client()
+        token = self.random_string()
+
+        with patch("jwt.encode", return_value=token):
+            client.post(
+                "/api/auth/password/reset-request",
+                data=json.dumps(dict(email="test@test.com")),
+                content_type="application/json",
+                environ_base={"HTTP_USER_AGENT": USER_AGENT},
+            )
+
+        auth_send_email_mock.send.assert_called_once_with(
+            {
+                "language": "en",
+                "email": user_1.email,
+            },
+            {
+                "expiration_delay": "a minute",
+                "username": user_1.username,
+                "password_reset_url": (
+                    f"{app.config['UI_URL']}/password-reset?token={token}"
+                ),
+                "fittrackee_url": app.config["UI_URL"],
+                "operating_system": "Linux",
+                "browser_name": "Firefox",
+            },
+            template="password_reset_request",
+        )
+
+    def test_it_does_not_return_error_when_user_does_not_exist(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(email="test@test.com")),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "password reset request processed"
+
+    def test_it_does_not_call_send_email_for_password_reset_request_when_user_does_not_exist(  # noqa
+        self, app: Flask, auth_send_email_mock: Mock
+    ) -> None:
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/password/reset-request",
+            data=json.dumps(dict(email="test@test.com")),
+            content_type="application/json",
+        )
+
+        auth_send_email_mock.assert_not_called()
+
+
+class TestPasswordUpdate(ApiTestCaseMixin):
+    def test_it_returns_error_if_payload_is_empty(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_token_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_password_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_token_is_invalid(self, app: Flask) -> None:
+        token = get_user_token(1)
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_401(response, "invalid token, please request a new token")
+
+    def test_it_returns_error_if_token_is_expired(
+        self, app: Flask, user_1: User
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app.test_client()
+
+        with travel(now + timedelta(seconds=61), tick=False):
+            response = client.post(
+                "/api/auth/password/update",
+                data=json.dumps(
+                    dict(
+                        token=token,
+                        password=self.random_string(),
+                    )
+                ),
+                content_type="application/json",
+            )
+
+            self.assert_401(
+                response, "invalid token, please request a new token"
+            )
+
+    def test_it_returns_error_if_password_is_invalid(
+        self, app: Flask, user_1: User
+    ) -> None:
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(length=7),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        self.assert_400(response, "password: 8 characters required\n")
+
+    def test_it_does_not_send_email_after_error(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(length=7),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        auth_send_email_mock.assert_not_called()
+
+    def test_it_updates_password(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "password updated"
+
+    def test_it_updates_password_when_user_is_suspended(
+        self,
+        app: Flask,
+        suspended_user: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        token = get_user_token(suspended_user.id, password_reset=True)
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "password updated"
+
+    def test_it_sends_email_for_password_change_after_successful_update(
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+            environ_base={"HTTP_USER_AGENT": USER_AGENT},
+        )
+
+        assert response.status_code == 200
+        auth_send_email_mock.send.assert_called_once_with(
+            user_data={
+                "language": "en",
+                "email": user_1.email,
+            },
+            email_data={
+                "username": user_1.username,
+                "fittrackee_url": app.config["UI_URL"],
+                "operating_system": "Linux",
+                "browser_name": "Firefox",
+            },
+            template="password_change",
+        )
+
+    def test_it_does_not_send_email_for_password_change_when_email_sending_is_disabled(  # noqa
+        self,
+        app_wo_email_activation: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        token = get_user_token(user_1.id, password_reset=True)
+        client = app_wo_email_activation.test_client()
+
+        client.post(
+            "/api/auth/password/update",
+            data=json.dumps(
+                dict(
+                    token=token,
+                    password=self.random_string(),
+                )
+            ),
+            content_type="application/json",
+            environ_base={"HTTP_USER_AGENT": USER_AGENT},
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+
+class TestEmailUpdateWitUnauthenticatedUser(ApiTestCaseMixin):
+    def test_it_returns_error_if_token_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/email/update",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_token_is_invalid(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/email/update",
+            data=json.dumps(dict(token=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_does_not_update_email_if_token_mismatches(
+        self, app: Flask, user_1: User
+    ) -> None:
+        user_1.confirmation_token = self.random_string()
+        new_email = "new.email@example.com"
+        user_1.email_to_confirm = new_email
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/email/update",
+            data=json.dumps(dict(token=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_email(self, app: Flask, user_1: User) -> None:
+        token = self.random_string()
+        user_1.confirmation_token = token
+        new_email = "new.email@example.com"
+        user_1.email_to_confirm = new_email
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/email/update",
+            data=json.dumps(dict(token=token)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "email updated"
+        assert user_1.email == new_email
+        assert user_1.email_to_confirm is None
+        assert user_1.confirmation_token is None
+
+
+class TestConfirmationAccount(ApiTestCaseMixin):
+    def test_it_returns_error_if_token_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/confirm",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_token_is_invalid(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/confirm",
+            data=json.dumps(dict(token=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_activates_user_account(
+        self, app: Flask, inactive_user: User
+    ) -> None:
+        token = self.random_string()
+        inactive_user.confirmation_token = token
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/confirm",
+            data=json.dumps(dict(token=token)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "account confirmation successful"
+        assert inactive_user.is_active is True
+        assert inactive_user.confirmation_token is None
+
+
+class TestResendAccountConfirmationEmail(ApiTestCaseMixin):
+    def test_it_returns_error_if_email_is_missing(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict()),
+            content_type="application/json",
+        )
+
+        self.assert_400(response)
+
+    def test_it_does_not_return_error_if_account_does_not_exist(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=self.random_email())),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "confirmation email resent"
+
+    def test_it_does_not_return_error_if_account_already_active(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=user_1.email)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "confirmation email resent"
+
+    def test_it_does_not_call_send_email_for_account_confirmation_if_user_is_active(  # noqa
+        self,
+        app: Flask,
+        user_1: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client = app.test_client()
+
+        client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=user_1.email)),
+            content_type="application/json",
+            environ_base={"HTTP_USER_AGENT": USER_AGENT},
+        )
+
+        auth_send_email_mock.send.assert_not_called()
+
+    def test_it_returns_success_if_user_is_inactive(
+        self, app: Flask, inactive_user: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=inactive_user.email)),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "confirmation email resent"
+
+    def test_it_updates_token_if_user_is_inactive(
+        self, app: Flask, inactive_user: User
+    ) -> None:
+        client = app.test_client()
+        previous_token = inactive_user.confirmation_token
+
+        client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=inactive_user.email)),
+            content_type="application/json",
+        )
+
+        assert inactive_user.confirmation_token != previous_token
+
+    def test_it_calls_send_email_for_account_confirmation_if_user_is_inactive(
+        self,
+        app: Flask,
+        inactive_user: User,
+        auth_send_email_mock: MagicMock,
+    ) -> None:
+        client = app.test_client()
+        expected_token = self.random_string()
+        inactive_user.language = "fr"
+
+        with patch("secrets.token_urlsafe", return_value=expected_token):
+            client.post(
+                "/api/auth/account/resend-confirmation",
+                data=json.dumps(dict(email=inactive_user.email)),
+                content_type="application/json",
+                environ_base={"HTTP_USER_AGENT": USER_AGENT},
+            )
+
+        auth_send_email_mock.send.assert_called_once_with(
+            {
+                "language": inactive_user.language,
+                "email": inactive_user.email,
+            },
+            {
+                "username": inactive_user.username,
+                "fittrackee_url": app.config["UI_URL"],
+                "operating_system": "Linux",
+                "browser_name": "Firefox",
+                "account_confirmation_url": (
+                    f"{app.config['UI_URL']}/account-confirmation"
+                    f"?token={expected_token}"
+                ),
+            },
+            template="account_confirmation",
+        )
+
+    def test_it_returns_error_if_email_sending_is_disabled(
+        self, app_wo_email_activation: Flask, inactive_user: User
+    ) -> None:
+        client = app_wo_email_activation.test_client()
+
+        response = client.post(
+            "/api/auth/account/resend-confirmation",
+            data=json.dumps(dict(email=inactive_user.email)),
+            content_type="application/json",
+        )
+
+        self.assert_404_with_message(
+            response, "the requested URL was not found on the server"
+        )
+
+
+class TestUserLogout(ApiTestCaseMixin, TokenMixin):
+    def test_it_returns_error_when_headers_are_missing(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post("/api/auth/logout", headers=dict())
+
+        self.assert_401(response, "provide a valid auth token")
+
+    def test_it_returns_error_when_token_is_invalid(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/logout", headers=dict(Authorization="Bearer invalid")
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_error_when_token_is_expired(
+        self, app: Flask, user_1: User
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        with travel(now + timedelta(seconds=61), tick=False):
+            response = client.post(
+                "/api/auth/logout",
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+            self.assert_401(response)
+
+    def test_user_can_logout(self, app: Flask, user_1: User) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/logout",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "successfully logged out"
+        assert response.status_code == 200
+
+    def test_suspended_user_can_logout(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.post(
+            "/api/auth/logout",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["message"] == "successfully logged out"
+        assert response.status_code == 200
+
+    def test_token_is_blacklisted_on_logout(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.post(
+            "/api/auth/logout",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        payload = jwt.decode(
+            auth_token,
+            app.config["SECRET_KEY"],
+            algorithms=["HS256"],
+        )
+        token = BlacklistedToken.query.filter_by(token=auth_token).one()
+        assert token.jti == payload["jti"]
+        assert token.blacklisted_on is not None
+
+    def test_token_without_jti_is_blacklisted_on_logout(
+        self, app: Flask, user_1: User
+    ) -> None:
+        """
+        temporary before all tokens without jti claim are expired
+        """
+        client = app.test_client()
+        auth_token = self.generate_token_without_jti(app, user_1.id)
+
+        client.post(
+            "/api/auth/logout",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        token = BlacklistedToken.query.filter_by(token=auth_token).one()
+        assert token.jti is None
+        assert token.blacklisted_on is not None
+
+    def test_it_returns_error_if_token_is_already_blacklisted(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        db.session.add(BlacklistedToken(token=auth_token))
+        db.session.commit()
+
+        response = client.post(
+            "/api/auth/logout",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_401(response)
+
+
+class TestUserPrivacyPolicyUpdate(ApiTestCaseMixin):
+    def test_it_returns_error_if_user_is_not_authenticated(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            "/api/auth/profile/edit/preferences",
+            content_type="application/json",
+            data=json.dumps(dict(accepted_policy=True)),
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_error_if_accepted_policy_is_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/privacy-policy",
+            content_type="application/json",
+            data=json.dumps(dict()),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_accepted_policy(
+        self,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        accepted_policy_date = datetime.now(timezone.utc)
+
+        with travel(accepted_policy_date, tick=False):
+            response = client.post(
+                "/api/auth/account/privacy-policy",
+                content_type="application/json",
+                data=json.dumps(dict(accepted_policy=True)),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        assert response.status_code == 200
+        assert user_1.accepted_policy_date == accepted_policy_date
+
+    def test_it_suspended_user_can_accept_policy(
+        self,
+        app: Flask,
+        suspended_user: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+        accepted_policy_date = datetime.now(timezone.utc)
+
+        with travel(accepted_policy_date, tick=False):
+            response = client.post(
+                "/api/auth/account/privacy-policy",
+                content_type="application/json",
+                data=json.dumps(dict(accepted_policy=True)),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        assert response.status_code == 200
+        assert suspended_user.accepted_policy_date == accepted_policy_date
+
+    @pytest.mark.parametrize("input_accepted_policy", [False, "", None, "foo"])
+    def test_it_return_error_if_user_has_not_accepted_policy(
+        self,
+        app: Flask,
+        user_1: User,
+        input_accepted_policy: Union[str, bool, None],
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/privacy-policy",
+            content_type="application/json",
+            data=json.dumps(dict(accepted_policy=input_accepted_policy)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 400
+
+
+class ApiUserTaskRequestMixin(UserTaskMixin, ApiTestCaseMixin):
+    def create_completed_export_request(
+        self, app: "Flask", user: "User"
+    ) -> "UserTask":
+        export_expiration = app.config["DATA_EXPORT_EXPIRATION"]
+        return self.create_user_data_export_task(
+            user,
+            created_at=(
+                datetime.now(timezone.utc) - timedelta(hours=export_expiration)
+            ),
+            progress=100,
+        )
+
+
+@patch("fittrackee.users.auth.export_data")
+class TestPostUserTaskRequest(ApiUserTaskRequestMixin):
+    def test_it_returns_data_export_info_when_no_ongoing_request_exists_for_user(  # noqa
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+    ) -> None:
+        self.create_user_data_export_task(user_2)
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        data_export_request = UserTask.query.filter_by(user_id=user_1.id).one()
+        assert data["status"] == "success"
+        assert data["request"] == jsonify_dict(
+            data_export_request.serialize(current_user=user_1)
+        )
+
+    def test_it_returns_error_if_ongoing_request_exist(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        db.session.add(
+            UserTask(user_id=user_1.id, task_type="user_data_export")
+        )
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "ongoing request exists")
+
+    def test_it_returns_error_if_existing_request_has_not_expired(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        self.create_user_data_export_task(user_1, progress=100)
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "completed request already exists")
+
+    def test_it_returns_new_request_if_existing_request_has_expired(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        completed_export_request = self.create_completed_export_request(
+            app, user_1
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        data_export_request = UserTask.query.filter_by(user_id=user_1.id).one()
+        assert data_export_request.id != completed_export_request.id
+        assert data["status"] == "success"
+        assert data["request"] == jsonify_dict(
+            data_export_request.serialize(current_user=user_1)
+        )
+
+    def test_it_calls_export_data_tasks_when_request_is_created(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        data_export_request = UserTask.query.filter_by(user_id=user_1.id).one()
+        export_data_mock.send.assert_called_once_with(
+            task_id=data_export_request.id
+        )
+
+    def test_it_does_not_calls_export_data_tasks_when_request_already_exists(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        export_expiration = app.config["DATA_EXPORT_EXPIRATION"]
+        self.create_user_data_export_task(
+            user_1,
+            created_at=(
+                datetime.now(timezone.utc) - timedelta(hours=export_expiration)
+            ),
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        export_data_mock.send.assert_not_called()
+
+    def test_it_returns_new_request_if_previous_request_has_expired(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        self.create_completed_export_request(app, user_1)
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        data_export_request = UserTask.query.filter_by(user_id=user_1.id).one()
+        export_data_mock.send.assert_called_once_with(
+            task_id=data_export_request.id
+        )
+
+    def test_suspended_user_can_request_data_export(
+        self,
+        export_data_mock: Mock,
+        app: Flask,
+        suspended_user: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        data_export_request = UserTask.query.filter_by(
+            user_id=suspended_user.id
+        ).one()
+        assert data["status"] == "success"
+        assert data["request"] == jsonify_dict(
+            data_export_request.serialize(current_user=suspended_user)
+        )
+
+    def test_it_does_not_calls_export_data_tasks_when_tasks_processing_is_disabled(  # noqa
+        self,
+        export_data_mock: Mock,
+        app_with_task_processing_disabled: Flask,
+        user_1: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app_with_task_processing_disabled, user_1.email
+        )
+
+        client.post(
+            "/api/auth/account/export/request",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert UserTask.query.filter_by(user_id=user_1.id).first() is not None
+        export_data_mock.send.assert_not_called()
+
+
+class TestGetUserTaskRequest(ApiUserTaskRequestMixin):
+    def test_it_returns_none_if_no_request(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            "/api/auth/account/export",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["request"] is None
+
+    def test_it_does_not_return_another_user_existing_request(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+    ) -> None:
+        self.create_completed_export_request(app, user_2)
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            "/api/auth/account/export",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["request"] is None
+
+    def test_it_returns_existing_request_for_authenticated_user(
+        self,
+        app: Flask,
+        user_1: User,
+    ) -> None:
+        completed_export_request = self.create_completed_export_request(
+            app, user_1
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            "/api/auth/account/export",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["request"] == jsonify_dict(
+            completed_export_request.serialize(current_user=user_1)
+        )
+
+    def test_suspended_user_can_get_data_export_info(
+        self,
+        app: Flask,
+        suspended_user: User,
+    ) -> None:
+        completed_export_request = self.create_completed_export_request(
+            app, suspended_user
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.get(
+            "/api/auth/account/export",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["request"] == jsonify_dict(
+            completed_export_request.serialize(current_user=suspended_user)
+        )
+
+
+class TestDownloadExportDataArchive(UserTaskMixin, ApiTestCaseMixin):
+    def test_it_returns_404_when_request_export_does_not_exist(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            f"/api/auth/account/export/{self.random_string()}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(response, "file not found")
+
+    def test_it_returns_404_when_request_export_from_another_user(
+        self, app: Flask, user_1: User, user_2: User
+    ) -> None:
+        archive_file_name = self.random_string()
+        self.create_user_data_export_task(
+            user_2, progress=100, file_path=archive_file_name
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            f"/api/auth/account/export/{archive_file_name}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(response, "file not found")
+
+    def test_it_returns_404_when_file_name_does_not_match(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.create_user_data_export_task(
+            user_1, progress=100, file_path=self.random_string()
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            f"/api/auth/account/export/{self.random_string()}",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(response, "file not found")
+
+    def test_it_calls_send_from_directory_if_request_exist(
+        self, app: Flask, user_1: User
+    ) -> None:
+        archive_file_name = self.random_string()
+        self.create_user_data_export_task(
+            user_1, progress=100, file_path=archive_file_name
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        with patch("fittrackee.users.auth.send_from_directory") as mock:
+            mock.return_value = "file"
+
+            client.get(
+                f"/api/auth/account/export/{archive_file_name}",
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        mock.assert_called_once_with(
+            app.config["UPLOAD_FOLDER"],
+            archive_file_name,
+            mimetype="application/zip",
+            as_attachment=True,
+        )
+
+    def test_suspended_user_can_download_data_export(
+        self,
+        app: Flask,
+        suspended_user: User,
+    ) -> None:
+        archive_file_name = self.random_string()
+        self.create_user_data_export_task(
+            suspended_user, progress=100, file_path=archive_file_name
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+        with patch("fittrackee.users.auth.send_from_directory") as mock:
+            mock.return_value = "file"
+
+            client.get(
+                f"/api/auth/account/export/{archive_file_name}",
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        mock.assert_called_once_with(
+            app.config["UPLOAD_FOLDER"],
+            archive_file_name,
+            mimetype="application/zip",
+            as_attachment=True,
+        )
+
+
+class TestGetBlockedUsers(ApiTestCaseMixin):
+    def test_it_returns_error_if_user_is_not_authenticated(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client = app.test_client()
+
+        response = client.get(
+            "/api/auth/blocked-users",
+            content_type="application/json",
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_error_if_user_is_suspended(
+        self, app: Flask, suspended_user: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, suspended_user.email
+        )
+
+        response = client.get(
+            "/api/auth/blocked-users",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_403(response)
+
+    def test_it_returns_empty_list_when_no_blocked_users(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            "/api/auth/blocked-users",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["blocked_users"] == []
+        assert data["pagination"] == {
+            "has_next": False,
+            "has_prev": False,
+            "page": 1,
+            "pages": 0,
+            "total": 0,
+        }
+
+    def test_it_returns_blocked_users(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+        user_3: User,
+        user_4: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        user_1.blocks_user(user_2)
+        user_3.blocks_user(user_1)
+        user_1.blocks_user(user_4)
+
+        response = client.get(
+            "/api/auth/blocked-users",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["blocked_users"] == [
+            jsonify_dict(user_4.serialize(current_user=user_1)),
+            jsonify_dict(user_2.serialize(current_user=user_1)),
+        ]
+        assert data["pagination"] == {
+            "has_next": False,
+            "has_prev": False,
+            "page": 1,
+            "pages": 1,
+            "total": 2,
+        }
+
+    @patch("fittrackee.users.auth.BLOCKED_USERS_PER_PAGE", 1)
+    def test_it_returns_first(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+        user_3: User,
+        user_4: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        user_1.blocks_user(user_2)
+        user_3.blocks_user(user_1)
+        user_1.blocks_user(user_4)
+
+        response = client.get(
+            "/api/auth/blocked-users?page=1",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["blocked_users"] == [
+            jsonify_dict(user_4.serialize(current_user=user_1)),
+        ]
+        assert data["pagination"] == {
+            "has_next": True,
+            "has_prev": False,
+            "page": 1,
+            "pages": 2,
+            "total": 2,
+        }
+
+    @patch("fittrackee.users.auth.BLOCKED_USERS_PER_PAGE", 1)
+    def test_it_returns_last_page(
+        self,
+        app: Flask,
+        user_1: User,
+        user_2: User,
+        user_3: User,
+        user_4: User,
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        user_1.blocks_user(user_2)
+        user_3.blocks_user(user_1)
+        user_1.blocks_user(user_4)
+
+        response = client.get(
+            "/api/auth/blocked-users?page=2",
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        assert data["blocked_users"] == [
+            jsonify_dict(user_2.serialize(current_user=user_1)),
+        ]
+        assert data["pagination"] == {
+            "has_next": False,
+            "has_prev": True,
+            "page": 2,
+            "pages": 2,
+            "total": 2,
+        }
+
+    def test_expected_scope_is_profile_read(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="get",
+            endpoint="/api/auth/blocked-users",
+            invalid_scope="profile:write",
+            expected_endpoint_scope="profile:read",
+        )
+
+
+class UserSuspensionTestCase(ReportMixin, ApiTestCaseMixin):
+    pass
+
+
+class TestGetUserSuspension(UserSuspensionTestCase):
+    route = "/api/auth/account/suspension"
+
+    def test_it_returns_error_when_user_is_not_authenticated(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.get(
+            self.route,
+            content_type="application/json",
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_404_when_user_is_not_suspended(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            self.route,
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(
+            response,
+            "user account is not suspended",
+        )
+
+    def test_it_returns_user_suspension(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(user_1_admin, user_2)
+        user_2.suspended_at = datetime.now(timezone.utc)
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route,
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "user_suspension": jsonify_dict(action.serialize(user_2)),
+        }
+
+    def test_expected_scope_is_profile_read(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="get",
+            endpoint=self.route.format(action_short_id=self.random_short_id()),
+            invalid_scope="profile:write",
+            expected_endpoint_scope="profile:read",
+        )
+
+
+class TestPostUserSuspensionAppeal(UserSuspensionTestCase):
+    route = "/api/auth/account/suspension/appeal"
+
+    def test_it_returns_error_when_user_is_not_authenticated(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            self.route,
+            data=json.dumps(dict(text=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_404_when_when_user_is_not_suspended(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            data=json.dumps(dict(text=self.random_string())),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(
+            response,
+            "user account is not suspended",
+        )
+
+    @pytest.mark.parametrize(
+        "input_data", [{}, {"text": ""}, {"comment": "some text"}]
+    )
+    def test_it_returns_400_when_no_text_provided(
+        self, app: Flask, user_1_admin: User, user_2: User, input_data: Dict
+    ) -> None:
+        self.create_report_user_action(user_1_admin, user_2)
+        user_2.suspended_at = datetime.now(timezone.utc)
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            data=json.dumps(input_data),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "no text provided")
+
+    def test_user_can_appeal_user_suspension(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(user_1_admin, user_2)
+        user_2.suspended_at = datetime.now(timezone.utc)
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        text = self.random_string()
+        now = datetime.now(timezone.utc)
+
+        with travel(now, tick=False):
+            response = client.post(
+                self.route,
+                content_type="application/json",
+                data=json.dumps(dict(text=text)),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        assert response.status_code == 201
+        assert response.json == {"status": "success"}
+        appeal = ReportActionAppeal.query.filter_by(action_id=action.id).one()
+        assert appeal.moderator_id is None
+        assert appeal.approved is None
+        assert appeal.created_at == now
+        assert appeal.user_id == user_2.id
+        assert appeal.updated_at is None
+
+    def test_user_can_appeal_user_suspension_only_once(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(user_1_admin, user_2)
+        user_2.suspended_at = datetime.now(timezone.utc)
+        db.session.commit()
+        appeal = ReportActionAppeal(
+            action_id=action.id,
+            user_id=user_2.id,
+            text=self.random_string(),
+        )
+        db.session.add(appeal)
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        text = self.random_string()
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            data=json.dumps(dict(text=text)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, error_message="you can appeal only once")
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint=self.route.format(action_short_id=self.random_short_id()),
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestGetUserSanction(UserSuspensionTestCase, CommentMixin):
+    route = "/api/auth/account/sanctions/{action_short_id}"
+
+    def test_it_returns_error_when_user_is_not_authenticated(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.get(
+            self.route.format(action_short_id=self.random_short_id()),
+            content_type="application/json",
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_404_when_sanction_does_not_exist(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=self.random_short_id()),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(
+            response,
+            "no sanction found",
+        )
+
+    def test_it_returns_404_when_sanction_is_for_another_user(
+        self, app: Flask, user_1_admin: User, user_2: User, user_3: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_3, action_type="user_warning"
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(
+            response,
+            "no sanction found",
+        )
+
+    def test_it_returns_user_warning(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_warning"
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "sanction": jsonify_dict(action.serialize(user_2, full=True)),
+        }
+
+    def test_it_returns_user_suspension(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_suspension"
+        )
+        user_2.suspended_at = None
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "sanction": jsonify_dict(action.serialize(user_2, full=True)),
+        }
+
+    def test_it_returns_user_suspension_when_user_is_suspended(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_suspension"
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "sanction": jsonify_dict(action.serialize(user_2, full=True)),
+        }
+
+    def test_it_returns_workout_suspension(
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2: User,
+        sport_1_cycling: Sport,
+        workout_cycling_user_2: Workout,
+    ) -> None:
+        action = self.create_report_workout_action(
+            user_1_admin, user_2, workout_cycling_user_2
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "sanction": jsonify_dict(action.serialize(user_2, full=True)),
+        }
+
+    def test_it_returns_comment_suspension(
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2: User,
+        sport_1_cycling: Sport,
+        workout_cycling_user_2: Workout,
+    ) -> None:
+        comment = self.create_comment(user_2, workout_cycling_user_2)
+        action = self.create_report_comment_action(
+            user_1_admin, user_2, comment
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.get(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        assert response.json == {
+            "status": "success",
+            "sanction": jsonify_dict(action.serialize(user_2, full=True)),
+        }
+
+    def test_expected_scope_is_profile_read(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="get",
+            endpoint=self.route.format(action_short_id=self.random_short_id()),
+            invalid_scope="profile:write",
+            expected_endpoint_scope="profile:read",
+        )
+
+
+class TestPostUserSanctionAppeal(CommentMixin, UserSuspensionTestCase):
+    route = "/api/auth/account/sanctions/{action_short_id}/appeal"
+
+    def test_it_returns_error_when_user_is_not_authenticated(
+        self, app: Flask
+    ) -> None:
+        client = app.test_client()
+
+        response = client.post(
+            self.route.format(action_short_id=self.random_short_id()),
+            data=json.dumps(dict(text=self.random_string())),
+            content_type="application/json",
+        )
+
+        self.assert_401(response)
+
+    def test_it_returns_404_when_when_no_sanction(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route.format(action_short_id=self.random_short_id()),
+            content_type="application/json",
+            data=json.dumps(dict(text=self.random_string())),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_404_with_message(
+            response,
+            "no sanction found",
+        )
+
+    @pytest.mark.parametrize(
+        "input_data", [{}, {"text": ""}, {"comment": "some text"}]
+    )
+    def test_it_returns_400_when_no_text_provided(
+        self, app: Flask, user_1_admin: User, user_2: User, input_data: Dict
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_warning"
+        )
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+
+        response = client.post(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            data=json.dumps(input_data),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, "no text provided")
+
+    def test_user_can_appeal_sanction(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_warning"
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        text = self.random_string()
+        now = datetime.now(timezone.utc)
+
+        with travel(now, tick=False):
+            response = client.post(
+                self.route.format(action_short_id=action.short_id),
+                content_type="application/json",
+                data=json.dumps(dict(text=text)),
+                headers=dict(Authorization=f"Bearer {auth_token}"),
+            )
+
+        assert response.status_code == 201
+        assert response.json == {"status": "success"}
+        appeal = ReportActionAppeal.query.filter_by(action_id=action.id).one()
+        assert appeal.moderator_id is None
+        assert appeal.approved is None
+        assert appeal.created_at == now
+        assert appeal.user_id == user_2.id
+        assert appeal.updated_at is None
+
+    def test_user_can_appeal_sanction_only_once(
+        self, app: Flask, user_1_admin: User, user_2: User
+    ) -> None:
+        action = self.create_report_user_action(
+            user_1_admin, user_2, action_type="user_warning"
+        )
+        appeal = ReportActionAppeal(
+            action_id=action.id,
+            user_id=user_2.id,
+            text=self.random_string(),
+        )
+        db.session.add(appeal)
+        db.session.commit()
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        text = self.random_string()
+
+        response = client.post(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            data=json.dumps(dict(text=text)),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, error_message="you can appeal only once")
+
+    def test_it_returns_error_when_reported_workout_is_deleted(
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2: User,
+        sport_1_cycling: Sport,
+        workout_cycling_user_2: Workout,
+    ) -> None:
+        action = self.create_report_workout_action(
+            user_1_admin,
+            user_2,
+            workout_cycling_user_2,
+            action_type="workout_suspension",
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        db.session.delete(workout_cycling_user_2)
+        db.session.commit()
+
+        response = client.post(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            data=json.dumps(dict(text=self.random_string())),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, error_message="workout has been deleted")
+
+    def test_it_returns_error_when_reported_comment_is_deleted(
+        self,
+        app: Flask,
+        user_1_admin: User,
+        user_2: User,
+        user_3: User,
+        sport_1_cycling: Sport,
+        workout_cycling_user_2: Workout,
+    ) -> None:
+        workout_cycling_user_2.workout_visibility = VisibilityLevel.PUBLIC
+        comment = self.create_comment(
+            user_3,
+            workout_cycling_user_2,
+            text_visibility=VisibilityLevel.PUBLIC,
+        )
+        action = self.create_report_comment_action(
+            user_1_admin, user_2, comment, action_type="comment_suspension"
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_2.email
+        )
+        db.session.delete(comment)
+        db.session.commit()
+
+        response = client.post(
+            self.route.format(action_short_id=action.short_id),
+            content_type="application/json",
+            data=json.dumps(dict(text=self.random_string())),
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response, error_message="comment has been deleted")
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1_admin: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1_admin,
+            client_method="post",
+            endpoint=self.route.format(action_short_id=self.random_short_id()),
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestUserNotificationsPreferencesPost(ApiTestCaseMixin):
+    route = "/api/auth/profile/edit/notifications"
+
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={},
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_fields_are_missing(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={"mention": True},
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_fields_are_missing_for_admin(
+        self, app: Flask, user_1_admin: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1_admin.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={
+                "comment_like": True,
+                "follow": True,
+                "follow_request": True,
+                "follow_request_approved": True,
+                "mention": False,
+                "workout_comment": False,
+                "workout_like": False,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_fields_are_missing_for_owner(
+        self, app: Flask, user_1_admin: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1_admin.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={
+                "comment_like": True,
+                "follow": True,
+                "follow_request": True,
+                "follow_request_approved": True,
+                "mention": False,
+                "workout_comment": False,
+                "workout_like": False,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_a_notification_type_is_invalid(
+        self, app: Flask, user_1_admin: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1_admin.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={
+                "comment_like": True,
+                "follow": True,
+                "follow_request": True,
+                "follow_request_approved": True,
+                "invalid": True,
+                "mention": False,
+                "workout_comment": False,
+                "workout_like": False,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_notification_preferences(
+        self, app: Flask, user_1: User
+    ) -> None:
+        user_1.update_notification_preferences(
+            {
+                "comment_like": True,
+                "follow": True,
+                "follow_request": True,
+                "follow_request_approved": True,
+                "mention": True,
+                "workout_comment": True,
+                "workout_like": True,
+            }
+        )
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+        updated_notification_preferences = {
+            "comment_like": True,
+            "follow": True,
+            "follow_request": True,
+            "follow_request_approved": True,
+            "mention": False,
+            "workout_comment": False,
+            "workout_like": False,
+        }
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json=updated_notification_preferences,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        db.session.refresh(user_1)
+        assert data["data"] == jsonify_dict(
+            user_1.serialize(current_user=user_1, light=False)
+        )
+        assert (
+            user_1.notification_preferences == updated_notification_preferences
+        )
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint=self.route,
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )
+
+
+class TestGetTimezones:
+    def test_it_returns_time_zones(self, app: Flask) -> None:
+        client = app.test_client()
+
+        response = client.get("/api/auth/timezones")
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["timezones"] == TIMEZONES
+        assert data["status"] == "success"
+
+
+class TestUserMessagesPreferencesPost(ApiTestCaseMixin):
+    route = "/api/auth/profile/edit/messages"
+
+    def test_it_returns_error_if_payload_is_empty(
+        self, app: Flask, user_1: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={},
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_returns_error_if_a_message_type_is_invalid(
+        self, app: Flask, user_1_admin: User
+    ) -> None:
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1_admin.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json={
+                "warning_about_large_number_of_workouts_on_map": False,
+                "invalid": True,
+            },
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        self.assert_400(response)
+
+    def test_it_updates_message_preferences(
+        self, app: Flask, user_1: User
+    ) -> None:
+        messages_preferences = {
+            "warning_about_large_number_of_workouts_on_map": False,
+        }
+        client, auth_token = self.get_test_client_and_auth_token(
+            app, user_1.email
+        )
+
+        response = client.post(
+            self.route,
+            content_type="application/json",
+            json=messages_preferences,
+            headers=dict(Authorization=f"Bearer {auth_token}"),
+        )
+
+        assert response.status_code == 200
+        data = json.loads(response.data.decode())
+        assert data["status"] == "success"
+        db.session.refresh(user_1)
+        assert data["data"] == jsonify_dict(
+            user_1.serialize(current_user=user_1, light=False)
+        )
+        assert user_1.messages_preferences == messages_preferences
+
+    def test_expected_scope_is_profile_write(
+        self, app: Flask, user_1: User
+    ) -> None:
+        self.assert_response_scope(
+            app=app,
+            user=user_1,
+            client_method="post",
+            endpoint=self.route,
+            invalid_scope="profile:read",
+            expected_endpoint_scope="profile:write",
+        )

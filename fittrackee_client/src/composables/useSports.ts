@@ -1,0 +1,92 @@
+import { computed, inject, reactive, ref } from 'vue'
+import type { Reactive, ComputedRef, Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import { AUTH_USER_STORE, SPORTS_STORE } from '@/store/constants'
+import type { IEquipment } from '@/types/equipments.ts'
+import type { ISport, ITranslatedSport } from '@/types/sports'
+import type {
+  IAuthUserProfile,
+  IUserSportPreferencesPayload,
+} from '@/types/user'
+import type { IWorkout, IWorkoutSegment } from '@/types/workouts'
+import { useStore } from '@/use/useStore'
+import { translateSports } from '@/utils/sports'
+import { convertDistance } from '@/utils/units'
+
+export default function useSports() {
+  const store = useStore()
+  const { t } = useI18n()
+
+  const sportColors = inject('sportColors') as Record<string, string>
+
+  const defaultColor = '#838383'
+
+  const displayModal: Ref<boolean> = ref(false)
+  const defaultEquipmentList: Ref<IEquipment[]> = ref([])
+
+  const sports: ComputedRef<ISport[]> = computed(
+    () => store.getters[SPORTS_STORE.GETTERS.SPORTS]
+  )
+  const translatedSports: ComputedRef<ITranslatedSport[]> = computed(() =>
+    translateSports(sports.value, t)
+  )
+
+  const sportPayload: Reactive<IUserSportPreferencesPayload> = reactive({
+    sport_id: 0,
+    color: null,
+    is_active: true,
+    stopped_speed_threshold: 1,
+    pace_speed_display: 'speed',
+    fromSport: false,
+    analysis_visibility: 'private',
+    map_visibility: 'private',
+    media_visibility: 'private',
+    workouts_visibility: 'private',
+  })
+
+  function updateIsActive(event: Event) {
+    sportPayload.is_active = (event.target as HTMLInputElement).checked
+  }
+  function updateDisplayModal(value: boolean) {
+    displayModal.value = value
+  }
+  function updateSport(authUser: IAuthUserProfile) {
+    const payload = { ...sportPayload }
+    payload.stopped_speed_threshold = authUser.imperial_units
+      ? convertDistance(sportPayload.stopped_speed_threshold, 'mi', 'km', 2)
+      : sportPayload.stopped_speed_threshold
+    store.dispatch(
+      AUTH_USER_STORE.ACTIONS.UPDATE_USER_SPORT_PREFERENCES,
+      payload
+    )
+  }
+  function resetSport(sportId: number, fromSport = false) {
+    store.dispatch(AUTH_USER_STORE.ACTIONS.RESET_USER_SPORT_PREFERENCES, {
+      sportId,
+      fromSport,
+    })
+  }
+  function getObjectSport(
+    object: IWorkout | IWorkoutSegment | { sport_id: number } | null
+  ): ISport | null {
+    return object?.sport_id
+      ? sports.value.find((s) => s.id === object.sport_id) || null
+      : null
+  }
+
+  return {
+    defaultColor,
+    defaultEquipmentList,
+    displayModal,
+    sportColors,
+    sportPayload,
+    sports,
+    translatedSports,
+    getObjectSport,
+    resetSport,
+    updateDisplayModal,
+    updateIsActive,
+    updateSport,
+  }
+}
